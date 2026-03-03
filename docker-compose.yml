@@ -1,0 +1,25 @@
+version: '3.8'
+
+services:
+  app:
+    build: .
+    ports:
+      - "3000:3000"
+    volumes:
+      - railway-data:/app/data
+    environment:
+      - NODE_ENV=production
+      - DATABASE_PATH=/app/data/railway.db
+    restart: always
+
+  db-browser:
+    image: coleifer/sqlite-web
+    ports:
+      - "8080:8080"
+    volumes:
+      - railway-data:/data
+    command: /data/railway.db
+    restart: always
+
+volumes:
+  railway-data:
