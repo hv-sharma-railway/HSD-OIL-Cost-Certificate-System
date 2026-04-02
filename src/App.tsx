@@ -13,13 +13,143 @@ import {
   CheckCircle2,
   AlertCircle,
   Check,
-  X
+  X,
+  Upload,
+  Eye,
+  EyeOff,
+  ExternalLink
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import JSZip from 'jszip';
-import { PDFDocument } from 'pdf-lib';
+import { PDFDocument, rgb, StandardFonts } from 'pdf-lib';
+import * as pdfjsLib from 'pdfjs-dist';
+import forge from 'node-forge';
+
+// Set worker source for pdfjs-dist
+const PDF_WORKER_URL = `https://unpkg.com/pdfjs-dist@${pdfjsLib.version}/build/pdf.worker.min.mjs`;
+pdfjsLib.GlobalWorkerOptions.workerSrc = PDF_WORKER_URL;
+
+// PDF Canvas Renderer Component
+const PdfCanvasRenderer = ({ pdfData }: { pdfData: string }) => {
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [retryCount, setRetryCount] = useState(0);
+  const containerRef = React.useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    let isMounted = true;
+    const renderPdf = async () => {
+      if (!pdfData) return;
+      
+      try {
+        setLoading(true);
+        setError(null);
+        
+        console.log('Starting PDF render, data length:', pdfData.length);
+        
+        // Convert base64 to Uint8Array
+        let bytes: Uint8Array;
+        try {
+          const base64Content = pdfData.includes(',') ? pdfData.split(',')[1] : pdfData;
+          const binaryString = atob(base64Content);
+          bytes = new Uint8Array(binaryString.length);
+          for (let i = 0; i < binaryString.length; i++) {
+            bytes[i] = binaryString.charCodeAt(i);
+          }
+        } catch (e) {
+          console.error('Base64 decoding failed:', e);
+          throw new Error('Invalid PDF data format');
+        }
+
+        const loadingTask = pdfjsLib.getDocument({ 
+          data: bytes
+        });
+        
+        const pdf = await loadingTask.promise;
+        
+        if (!isMounted) return;
+        console.log('PDF loaded, pages:', pdf.numPages);
+        
+        if (containerRef.current) {
+          containerRef.current.innerHTML = ''; // Clear previous renders
+          
+          for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
+            const page = await pdf.getPage(pageNum);
+            const viewport = page.getViewport({ scale: 1.5 });
+            
+            const pageContainer = document.createElement('div');
+            pageContainer.className = "relative mb-6 group";
+            
+            const pageLabel = document.createElement('div');
+            pageLabel.className = "absolute -top-3 left-4 bg-[#0052CC] text-white text-[10px] font-bold px-2 py-0.5 rounded-full shadow-sm z-10 opacity-80 group-hover:opacity-100 transition-opacity";
+            pageLabel.textContent = `Page ${pageNum}`;
+            
+            const canvas = document.createElement('canvas');
+            const context = canvas.getContext('2d');
+            if (!context) throw new Error('Could not get canvas context');
+            
+            canvas.height = viewport.height;
+            canvas.width = viewport.width;
+            canvas.className = "w-full rounded-lg shadow-sm border border-gray-200 bg-white";
+            
+            pageContainer.appendChild(pageLabel);
+            pageContainer.appendChild(canvas);
+            containerRef.current.appendChild(pageContainer);
+            
+            await page.render({
+              canvasContext: context,
+              viewport: viewport,
+              // @ts-ignore
+              canvas: canvas
+            }).promise;
+            
+            console.log(`Rendered page ${pageNum}`);
+          }
+        }
+        
+        setLoading(false);
+      } catch (err: any) {
+        console.error('Detailed PDF Render Error:', err);
+        if (isMounted) {
+          setError(`Failed to render PDF: ${err.message || 'Unknown error'}. Please try opening in a new tab.`);
+          setLoading(false);
+        }
+      }
+    };
+
+    renderPdf();
+    return () => { isMounted = false; };
+  }, [pdfData, retryCount]);
+
+  return (
+    <div className="w-full h-full overflow-y-auto bg-gray-100 p-4 rounded-xl border border-[#E5E7EB]">
+      {loading && (
+        <div className="flex flex-col items-center justify-center h-full gap-3">
+          <div className="w-8 h-8 border-4 border-[#0052CC]/30 border-t-[#0052CC] rounded-full animate-spin" />
+          <p className="text-sm font-medium text-gray-500">Rendering PDF pages...</p>
+        </div>
+      )}
+      {error && (
+        <div className="flex flex-col items-center justify-center h-full text-center p-8">
+          <AlertCircle className="w-12 h-12 text-red-400 mb-4" />
+          <p className="text-sm font-medium text-red-600 mb-4">{error}</p>
+          <button 
+            onClick={() => {
+              setRetryCount(prev => prev + 1);
+            }}
+            className="bg-[#0052CC] text-white px-4 py-2 rounded-lg font-bold text-xs hover:bg-[#0747A6] transition-all"
+          >
+            Retry Rendering
+          </button>
+        </div>
+      )}
+      <div ref={containerRef} className={loading || error ? "hidden" : "block"} />
+    </div>
+  );
+};
+
 import { cn } from './utils';
 import { 
   MONTHS, 
@@ -36,8 +166,16 @@ import {
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<'generate' | 'prices' | 'sheds'>('generate');
-  const [selectedMonth, setSelectedMonth] = useState('FEB');
-  const [selectedYear, setSelectedYear] = useState('2026');
+  const [selectedMonth, setSelectedMonth] = useState(() => {
+    const d = new Date();
+    d.setMonth(d.getMonth() - 1);
+    return MONTHS[d.getMonth()];
+  });
+  const [selectedYear, setSelectedYear] = useState(() => {
+    const d = new Date();
+    d.setMonth(d.getMonth() - 1);
+    return d.getFullYear().toString();
+  });
   const [priceMaster, setPriceMaster] = useState<PriceMasterEntry[]>([]);
   const [shedMaster, setShedMaster] = useState<ShedMasterEntry[]>([]);
   const [selectedSupplyingShed, setSelectedSupplyingShed] = useState('HXP');
@@ -46,6 +184,184 @@ export default function App() {
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
   const [deletingPriceId, setDeletingPriceId] = useState<string | null>(null);
+  const [masterVoucherPdf, setMasterVoucherPdf] = useState<string | null>(null);
+  const [masterVoucherPdfName, setMasterVoucherPdfName] = useState<string | null>(null);
+  const [masterVoucherPdfUrl, setMasterVoucherPdfUrl] = useState<string | null>(null);
+  const [showPdfPreview, setShowPdfPreview] = useState(false);
+  const [signatureImage, setSignatureImage] = useState<string | null>(null);
+  const [signatoryName, setSignatoryName] = useState('Divisional Finance Manager');
+  const [signatoryDesignation, setSignatoryDesignation] = useState('Western Railway, Rajkot');
+  const [applySignature, setApplySignature] = useState(false);
+  const [signatureType, setSignatureType] = useState<'visual' | 'digital' | 'usb'>('visual');
+  const [pfxFile, setPfxFile] = useState<string | null>(null);
+  const [localSignerPort, setLocalSignerPort] = useState('55101');
+  const [localSignerProtocol, setLocalSignerProtocol] = useState<'http' | 'https'>('https');
+  const [signerStatus, setSignerStatus] = useState<'idle' | 'testing' | 'online' | 'offline'>('idle');
+  const [signerLog, setSignerLog] = useState<string[]>([]);
+  const [pfxPassword, setPfxPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+
+  const signPdf = async (pdfBytes: Uint8Array): Promise<Uint8Array> => {
+    if (!applySignature || !signatureType) return pdfBytes;
+
+    if (signatureType === 'usb') {
+      const addLog = (msg: string) => setSignerLog(prev => [...prev.slice(-4), `${new Date().toLocaleTimeString()}: ${msg}`]);
+      addLog(`Attempting USB sign on port ${localSignerPort}...`);
+
+      try {
+        // More robust base64 conversion
+        const binary = Array.from(pdfBytes).map(b => String.fromCharCode(b)).join('');
+        const base64Pdf = btoa(binary);
+        
+        const baseUrl = `${localSignerProtocol}://127.0.0.1:${localSignerPort}`;
+        
+        // Try common endpoints in order
+        const endpoints = ['/sign', '/signPdf', '/process', '/api/sign'];
+        let lastError = '';
+
+        for (const endpoint of endpoints) {
+          try {
+            addLog(`Trying endpoint: ${endpoint}...`);
+            const response = await fetch(`${baseUrl}${endpoint}`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                pdfData: base64Pdf,
+                data: base64Pdf, // Some signers expect 'data'
+                signatoryName,
+                reason: 'HSD Oil Cost Certificate',
+                location: 'Rajkot'
+              }),
+              // Increase timeout for local services
+              signal: AbortSignal.timeout(15000)
+            });
+
+            if (response.ok) {
+              const result = await response.json();
+              const signedData = result.signedPdfData || result.data || result.signedData;
+              
+              if (signedData) {
+                addLog(`Success! Signature received from ${endpoint}`);
+                const signedBinary = atob(signedData);
+                const signedBytes = new Uint8Array(signedBinary.length);
+                for (let i = 0; i < signedBinary.length; i++) {
+                  signedBytes[i] = signedBinary.charCodeAt(i);
+                }
+                return signedBytes;
+              }
+            } else {
+              addLog(`Endpoint ${endpoint} returned status ${response.status}`);
+            }
+          } catch (e: any) {
+            lastError = e.message;
+            addLog(`Endpoint ${endpoint} failed: ${e.message}`);
+          }
+        }
+
+        throw new Error(`All signing endpoints failed. Last error: ${lastError}`);
+      } catch (e: any) {
+        addLog(`USB Signing Error: ${e.message}`);
+        console.warn('USB signing failed. Falling back to visual stamp.', e);
+        return pdfBytes;
+      }
+    }
+
+    if (signatureType !== 'digital' || !pfxFile || !pfxPassword) {
+      return pdfBytes;
+    }
+
+    try {
+      const pfxDer = forge.util.decode64(pfxFile.split(',')[1]);
+      const pfxAsn1 = forge.asn1.fromDer(pfxDer);
+      const pfx = forge.pkcs12.pkcs12FromAsn1(pfxAsn1, pfxPassword);
+
+      // Get private key and certificate
+      const keyBags = pfx.getBags({ bagType: forge.pki.oids.pkcs8ShroudedKeyBag });
+      const certBags = pfx.getBags({ bagType: forge.pki.oids.certBag });
+      
+      const privateKey = keyBags[forge.pki.oids.pkcs8ShroudedKeyBag]?.[0]?.key;
+      const certificate = certBags[forge.pki.oids.certBag]?.[0]?.cert;
+
+      if (!privateKey || !certificate) {
+        throw new Error('Could not find private key or certificate in PFX');
+      }
+
+      const pdfDoc = await PDFDocument.load(pdfBytes);
+      const pages = pdfDoc.getPages();
+      const firstPage = pages[0];
+      const { width } = firstPage.getSize();
+
+      const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+      const boldFont = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
+
+      const sigWidth = 200;
+      const sigHeight = 60;
+      const x = width - sigWidth - 20;
+      const y = 40;
+
+      // Draw signature box
+      firstPage.drawRectangle({
+        x, y, width: sigWidth, height: sigHeight,
+        borderColor: rgb(0, 0.32, 0.8),
+        borderWidth: 1,
+        color: rgb(0.95, 0.97, 1),
+      });
+
+      firstPage.drawText('DIGITALLY SIGNED', {
+        x: x + 10, y: y + sigHeight - 15,
+        size: 10, font: boldFont, color: rgb(0, 0.32, 0.8),
+      });
+
+      const commonName = certificate.subject.getField('CN')?.value || signatoryName;
+      const issuer = certificate.issuer.getField('CN')?.value || 'Unknown Issuer';
+      const now = new Date().toLocaleString('en-IN');
+
+      firstPage.drawText(`Signed by: ${commonName}`, {
+        x: x + 10, y: y + sigHeight - 30,
+        size: 8, font, color: rgb(0.2, 0.2, 0.2),
+      });
+
+      firstPage.drawText(`Issuer: ${issuer}`, {
+        x: x + 10, y: y + sigHeight - 42,
+        size: 7, font, color: rgb(0.4, 0.4, 0.4),
+      });
+
+      firstPage.drawText(`Date: ${now}`, {
+        x: x + 10, y: y + sigHeight - 54,
+        size: 7, font, color: rgb(0.4, 0.4, 0.4),
+      });
+
+      return await pdfDoc.save();
+    } catch (e: any) {
+      console.error('Digital signing error:', e);
+      throw new Error(`Digital signing failed: ${e.message || 'Unknown error'}. Please check your password.`);
+    }
+  };
+
+  const testSignerConnection = async () => {
+    setSignerStatus('testing');
+    try {
+      const baseUrl = `${localSignerProtocol}://127.0.0.1:${localSignerPort}`;
+      // Try common health check endpoints
+      const endpoints = ['/check/isLive', '/isLive', '/status', '/'];
+      let success = false;
+      
+      for (const endpoint of endpoints) {
+        try {
+          const res = await fetch(`${baseUrl}${endpoint}`, { mode: 'no-cors' });
+          // If we get any response (even no-cors opaque), it means service is listening
+          success = true;
+          break;
+        } catch (e) {
+          continue;
+        }
+      }
+      
+      setSignerStatus(success ? 'online' : 'offline');
+    } catch (e) {
+      setSignerStatus('offline');
+    }
+  };
 
   const fileToBase64 = (file: File): Promise<string> => {
     return new Promise((resolve, reject) => {
@@ -55,6 +371,15 @@ export default function App() {
       reader.onerror = error => reject(error);
     });
   };
+
+  // Cleanup Object URL
+  useEffect(() => {
+    return () => {
+      if (masterVoucherPdfUrl) {
+        URL.revokeObjectURL(masterVoucherPdfUrl);
+      }
+    };
+  }, [masterVoucherPdfUrl]);
 
   // Fetch initial data
   useEffect(() => {
@@ -72,22 +397,22 @@ export default function App() {
 
         // If initial data was empty, populate DB with defaults
         if (sheds.length === 0) {
-          INITIAL_SHED_MASTER.forEach(async s => {
+          for (const s of INITIAL_SHED_MASTER) {
             await fetch('/api/sheds', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify(s)
             });
-          });
+          }
         }
         if (prices.length === 0) {
-          INITIAL_PRICE_MASTER.forEach(async p => {
+          for (const p of INITIAL_PRICE_MASTER) {
             await fetch('/api/prices', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify(p)
             });
-          });
+          }
         }
       } catch (error) {
         console.error('Error fetching data:', error);
@@ -116,7 +441,7 @@ export default function App() {
       during_month: selectedMonth,
       during_year: selectedYear,
       supplying_shed: selectedSupplyingShed,
-      pricing_period: 'Average',
+      pricing_period: 'average',
       goods_litres: 0,
       coach_litres: 0,
       is_power_car: false
@@ -187,10 +512,14 @@ export default function App() {
     });
   }, [priceMaster]);
 
-  const [newPriceEntry, setNewPriceEntry] = useState({
-    month: 'JAN',
-    year: '2026',
-    supplying_shed: 'HXP'
+  const [newPriceEntry, setNewPriceEntry] = useState(() => {
+    const d = new Date();
+    d.setMonth(d.getMonth() - 1);
+    return {
+      month: MONTHS[d.getMonth()],
+      year: d.getFullYear().toString(),
+      supplying_shed: 'HXP'
+    };
   });
 
   const addPriceEntry = async () => {
@@ -206,10 +535,14 @@ export default function App() {
     const newEntry: PriceMasterEntry = {
       id: Math.random().toString(36).substr(2, 9),
       ...newPriceEntry,
+      periodNames: {
+        p1: '1st-15th',
+        p2: '16th-End'
+      },
       periods: {
-        '1st-15th': { base_price: 0, excise: 0, vat: 0, overhead: 0 },
-        '16th-End': { base_price: 0, excise: 0, vat: 0, overhead: 0 },
-        'Average': { base_price: 0, excise: 0, vat: 0, overhead: 0 }
+        p1: { base_price: 0, excise: 0, vat: 0, overhead: 0 },
+        p2: { base_price: 0, excise: 0, vat: 0, overhead: 0 },
+        average: { base_price: 0, excise: 0, vat: 0, overhead: 0 }
       }
     };
     
@@ -231,12 +564,12 @@ export default function App() {
 
     let updatedPeriods = { ...entry.periods, [period]: data };
 
-    // Auto-calculate average if 1st-15th or 16th-End is updated
-    if (period === '1st-15th' || period === '16th-End') {
-      const p1 = updatedPeriods['1st-15th'];
-      const p2 = updatedPeriods['16th-End'];
-      updatedPeriods['Average'] = {
-        ...updatedPeriods['Average'],
+    // Auto-calculate average if p1 or p2 is updated
+    if (period === 'p1' || period === 'p2') {
+      const p1 = updatedPeriods['p1'];
+      const p2 = updatedPeriods['p2'];
+      updatedPeriods['average'] = {
+        ...updatedPeriods['average'],
         base_price: Number(((p1.base_price + p2.base_price) / 2).toFixed(2)),
         excise: Number(((p1.excise + p2.excise) / 2).toFixed(2)),
         vat: Number(((p1.vat + p2.vat) / 2).toFixed(2)),
@@ -258,6 +591,30 @@ export default function App() {
       setPriceMaster(prev => prev.map(p => p.id === entryId ? updatedEntry : p));
     } catch (error) {
       console.error('Error updating price:', error);
+    }
+  };
+
+  const updatePeriodName = async (entryId: string, periodKey: 'p1' | 'p2', newName: string) => {
+    const entry = priceMaster.find(p => p.id === entryId);
+    if (!entry) return;
+
+    const updatedEntry = {
+      ...entry,
+      periodNames: {
+        ...entry.periodNames,
+        [periodKey]: newName
+      }
+    };
+
+    try {
+      await fetch('/api/prices', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(updatedEntry)
+      });
+      setPriceMaster(prev => prev.map(p => p.id === entryId ? updatedEntry : p));
+    } catch (error) {
+      console.error('Error updating period name:', error);
     }
   };
 
@@ -426,8 +783,27 @@ export default function App() {
 
         doc.setFont('times', 'normal');
         doc.text('Encl: One statement', 15, lastY + 25);
-        doc.text('For, Divisional Finance Manager,', 195, lastY + 25, { align: 'right' });
-        doc.text('Western Railway, Rajkot.', 195, lastY + 30, { align: 'right' });
+        doc.text(`For, ${signatoryName},`, 195, lastY + 25, { align: 'right' });
+        doc.text(signatoryDesignation, 195, lastY + 30, { align: 'right' });
+
+        if (applySignature) {
+          if (signatureImage) {
+            try {
+              doc.addImage(signatureImage, 'PNG', 150, lastY + 5, 40, 15);
+            } catch (e) {
+              console.error('Error adding signature image:', e);
+            }
+          }
+          
+          // Add "Digitally Signed" stamp
+          doc.setFontSize(8);
+          doc.setTextColor(100, 100, 100);
+          const now = new Date().toLocaleString('en-IN');
+          doc.text(`Digitally signed by ${signatoryName}`, 195, lastY + 35, { align: 'right' });
+          doc.text(`Date: ${now}`, 195, lastY + 38, { align: 'right' });
+          doc.setTextColor(0, 0, 0);
+          doc.setFontSize(10);
+        }
 
         doc.setFont('courier', 'bold');
         doc.text('Ltrs', 160, lastY + 50, { align: 'right' });
@@ -482,9 +858,21 @@ export default function App() {
           }
         });
 
-        const finalPdfBytes = doc.output('arraybuffer');
+        const certPdfBytes = doc.output('arraybuffer');
+        let finalCertPdfBytes = new Uint8Array(certPdfBytes);
+
+        if (applySignature) {
+          try {
+            finalCertPdfBytes = await signPdf(finalCertPdfBytes);
+          } catch (e: any) {
+            alert(e.message);
+            setIsGenerating(false);
+            return;
+          }
+        }
+
         const fileName = `${shed.shed_name}_${shed.railway}_RS_${Math.round(calc.total)}_${shed.coach_litres + (shed.is_power_car ? 0 : shed.goods_litres)}_LITRES_${shed.during_month}${shed.during_year}.pdf`;
-        zip.file(fileName, finalPdfBytes);
+        zip.file(fileName, finalCertPdfBytes);
       }
 
       const zipContent = await zip.generateAsync({ type: 'blob' });
@@ -504,6 +892,32 @@ export default function App() {
     if (window.confirm('Are you sure you want to clear all added sheds?')) {
       setSelectedSheds([]);
     }
+  };
+
+  const parsePageRanges = (rangeStr: string, maxPages: number): number[] => {
+    const pages = new Set<number>();
+    const parts = rangeStr.split(',').map(p => p.trim());
+    
+    parts.forEach(part => {
+      if (part.includes('-')) {
+        const rangeParts = part.split('-').map(n => parseInt(n.trim()));
+        if (rangeParts.length === 2) {
+          const [start, end] = rangeParts;
+          if (!isNaN(start) && !isNaN(end)) {
+            for (let i = Math.max(1, start); i <= Math.min(end, maxPages); i++) {
+              pages.add(i - 1); // 0-indexed
+            }
+          }
+        }
+      } else {
+        const page = parseInt(part);
+        if (!isNaN(page) && page >= 1 && page <= maxPages) {
+          pages.add(page - 1); // 0-indexed
+        }
+      }
+    });
+    
+    return Array.from(pages).sort((a, b) => a - b);
   };
 
   const generateCertificatesZip = async () => {
@@ -664,8 +1078,27 @@ export default function App() {
 
         doc.setFont('times', 'normal');
         doc.text('Encl: One statement', 15, lastY + 25);
-        doc.text('For, Divisional Finance Manager,', 195, lastY + 25, { align: 'right' });
-        doc.text('Western Railway, Rajkot.', 195, lastY + 30, { align: 'right' });
+        doc.text(`For, ${signatoryName},`, 195, lastY + 25, { align: 'right' });
+        doc.text(signatoryDesignation, 195, lastY + 30, { align: 'right' });
+
+        if (applySignature) {
+          if (signatureImage) {
+            try {
+              doc.addImage(signatureImage, 'PNG', 150, lastY + 5, 40, 15);
+            } catch (e) {
+              console.error('Error adding signature image:', e);
+            }
+          }
+          
+          // Add "Digitally Signed" stamp
+          doc.setFontSize(8);
+          doc.setTextColor(100, 100, 100);
+          const now = new Date().toLocaleString('en-IN');
+          doc.text(`Digitally signed by ${signatoryName}`, 195, lastY + 35, { align: 'right' });
+          doc.text(`Date: ${now}`, 195, lastY + 38, { align: 'right' });
+          doc.setTextColor(0, 0, 0);
+          doc.setFontSize(10);
+        }
 
         doc.setFont('courier', 'bold');
         doc.text('Ltrs', 160, lastY + 50, { align: 'right' });
@@ -721,10 +1154,21 @@ export default function App() {
         });
 
         const certPdfBytes = doc.output('arraybuffer');
+        let finalCertPdfBytes = new Uint8Array(certPdfBytes);
+
+        if (applySignature) {
+          try {
+            finalCertPdfBytes = await signPdf(finalCertPdfBytes);
+          } catch (e: any) {
+            alert(e.message);
+            setIsGenerating(false);
+            return;
+          }
+        }
         
         // 2. Merge with Voucher and Pricing PDF
         const mergedPdf = await PDFDocument.create();
-        const certPdfDoc = await PDFDocument.load(certPdfBytes);
+        const certPdfDoc = await PDFDocument.load(finalCertPdfBytes);
         const certPages = await mergedPdf.copyPages(certPdfDoc, certPdfDoc.getPageIndices());
         certPages.forEach(p => mergedPdf.addPage(p));
 
@@ -736,46 +1180,64 @@ export default function App() {
             const voucherPages = await mergedPdf.copyPages(voucherPdfDoc, voucherPdfDoc.getPageIndices());
             voucherPages.forEach(p => mergedPdf.addPage(p));
           } catch (e) {
-            console.error('Error adding voucher PDF:', e);
+            console.error('Error adding individual voucher PDF:', e);
+          }
+        } else if (masterVoucherPdf && shed.voucher_pages) {
+          try {
+            const masterBytes = Uint8Array.from(atob(masterVoucherPdf.split(',')[1]), c => c.charCodeAt(0));
+            const masterPdfDoc = await PDFDocument.load(masterBytes);
+            const maxPages = masterPdfDoc.getPageCount();
+            const pageIndices = parsePageRanges(shed.voucher_pages, maxPages);
+            
+            if (pageIndices.length > 0) {
+              const copiedPages = await mergedPdf.copyPages(masterPdfDoc, pageIndices);
+              copiedPages.forEach(p => mergedPdf.addPage(p));
+            }
+          } catch (e) {
+            console.error('Error extracting pages from master voucher PDF:', e);
           }
         }
 
         // Add Pricing PDF
         const priceEntry = priceMaster.find(p => p.supplying_shed === shed.supplying_shed && p.month === shed.during_month && p.year === shed.during_year);
         if (priceEntry) {
-          let pricingPdfBase64 = '';
-          if (shed.pricing_period === 'Average') {
-            // Merge 1st-15th and 16th-End for Average
-            const pdf1 = priceEntry.periods['1st-15th'].pdf_base64;
-            const pdf2 = priceEntry.periods['16th-End'].pdf_base64;
-            if (pdf1 && pdf2) {
-              const tempMerged = await PDFDocument.create();
-              const p1Bytes = Uint8Array.from(atob(pdf1.split(',')[1]), c => c.charCodeAt(0));
-              const p2Bytes = Uint8Array.from(atob(pdf2.split(',')[1]), c => c.charCodeAt(0));
-              const doc1 = await PDFDocument.load(p1Bytes);
-              const doc2 = await PDFDocument.load(p2Bytes);
-              const pages1 = await tempMerged.copyPages(doc1, doc1.getPageIndices());
-              const pages2 = await tempMerged.copyPages(doc2, doc2.getPageIndices());
-              pages1.forEach(p => tempMerged.addPage(p));
-              pages2.forEach(p => tempMerged.addPage(p));
-              const mergedBytes = await tempMerged.save();
-              const pricingPages = await mergedPdf.copyPages(tempMerged, tempMerged.getPageIndices());
-              pricingPages.forEach(p => mergedPdf.addPage(p));
-            } else if (pdf1 || pdf2) {
-              pricingPdfBase64 = pdf1 || pdf2 || '';
+          if (shed.pricing_period === 'average') {
+            // Merge p1 and p2 for average
+            const pdf1 = priceEntry.periods.p1.pdf_base64;
+            const pdf2 = priceEntry.periods.p2.pdf_base64;
+            
+            if (pdf1) {
+              try {
+                const p1Bytes = Uint8Array.from(atob(pdf1.split(',')[1]), c => c.charCodeAt(0));
+                const doc1 = await PDFDocument.load(p1Bytes);
+                const pages1 = await mergedPdf.copyPages(doc1, doc1.getPageIndices());
+                pages1.forEach(p => mergedPdf.addPage(p));
+              } catch (e) {
+                console.error('Error adding pricing PDF p1:', e);
+              }
+            }
+            
+            if (pdf2) {
+              try {
+                const p2Bytes = Uint8Array.from(atob(pdf2.split(',')[1]), c => c.charCodeAt(0));
+                const doc2 = await PDFDocument.load(p2Bytes);
+                const pages2 = await mergedPdf.copyPages(doc2, doc2.getPageIndices());
+                pages2.forEach(p => mergedPdf.addPage(p));
+              } catch (e) {
+                console.error('Error adding pricing PDF p2:', e);
+              }
             }
           } else {
-            pricingPdfBase64 = priceEntry.periods[shed.pricing_period].pdf_base64 || '';
-          }
-
-          if (pricingPdfBase64) {
-            try {
-              const pricingBytes = Uint8Array.from(atob(pricingPdfBase64.split(',')[1]), c => c.charCodeAt(0));
-              const pricingPdfDoc = await PDFDocument.load(pricingBytes);
-              const pricingPages = await mergedPdf.copyPages(pricingPdfDoc, pricingPdfDoc.getPageIndices());
-              pricingPages.forEach(p => mergedPdf.addPage(p));
-            } catch (e) {
-              console.error('Error adding pricing PDF:', e);
+            const pricingPdfBase64 = priceEntry.periods[shed.pricing_period].pdf_base64;
+            if (pricingPdfBase64) {
+              try {
+                const pricingBytes = Uint8Array.from(atob(pricingPdfBase64.split(',')[1]), c => c.charCodeAt(0));
+                const pricingPdfDoc = await PDFDocument.load(pricingBytes);
+                const pricingPages = await mergedPdf.copyPages(pricingPdfDoc, pricingPdfDoc.getPageIndices());
+                pricingPages.forEach(p => mergedPdf.addPage(p));
+              } catch (e) {
+                console.error('Error adding pricing PDF:', e);
+              }
             }
           }
         }
@@ -905,23 +1367,150 @@ export default function App() {
                 </div>
               </section>
 
-              {/* Step 2: Add Sheds */}
+              {/* Step 2: Master Voucher PDF */}
               <section className="bg-white rounded-2xl shadow-sm border border-[#E5E7EB] p-6">
-                <div className="flex items-center justify-between mb-6">
-                  <div className="flex items-center gap-2">
-                    <Building2 className="text-[#0052CC] w-5 h-5" />
-                    <h2 className="text-sm font-bold uppercase tracking-widest text-[#6B7280]">Step 2: Add Consuming Sheds</h2>
+                <div className="flex items-center gap-2 mb-6">
+                  <FileText className="text-[#0052CC] w-5 h-5" />
+                  <h2 className="text-sm font-bold uppercase tracking-widest text-[#6B7280]">Step 2: Upload Master Voucher PDF</h2>
+                </div>
+                <div className="flex items-center gap-4">
+                  <div className="relative flex-1">
+                    <input
+                      type="file"
+                      accept=".pdf"
+                      onChange={async (e) => {
+                        const file = e.target.files?.[0];
+                        if (file) {
+                          const base64 = await fileToBase64(file);
+                          setMasterVoucherPdf(base64);
+                          setMasterVoucherPdfName(file.name);
+                          
+                          // Create Object URL for preview
+                          if (masterVoucherPdfUrl) URL.revokeObjectURL(masterVoucherPdfUrl);
+                          const url = URL.createObjectURL(file);
+                          setMasterVoucherPdfUrl(url);
+                        }
+                      }}
+                      className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
+                    />
+                    <div className={cn(
+                      "w-full border-2 border-dashed rounded-xl p-8 flex flex-col items-center justify-center gap-3 transition-all",
+                      masterVoucherPdf ? "bg-emerald-50 border-emerald-200" : "bg-gray-50 border-gray-200 hover:bg-gray-100"
+                    )}>
+                      {masterVoucherPdf ? (
+                        <>
+                          <div className="bg-emerald-500 p-2 rounded-full">
+                            <Check className="text-white w-6 h-6" />
+                          </div>
+                          <div className="text-center">
+                            <p className="text-sm font-bold text-emerald-700">{masterVoucherPdfName}</p>
+                            <p className="text-xs text-emerald-600 mt-1">Master PDF uploaded successfully</p>
+                          </div>
+                        </>
+                      ) : (
+                        <>
+                          <div className="bg-[#0052CC]/10 p-3 rounded-full">
+                            <Upload className="text-[#0052CC] w-6 h-6" />
+                          </div>
+                          <div className="text-center">
+                            <p className="text-sm font-bold text-[#1A1A1A]">Click or drag to upload master voucher PDF</p>
+                            <p className="text-xs text-[#6B7280] mt-1">This PDF will be used to extract pages for each shed</p>
+                          </div>
+                        </>
+                      )}
+                    </div>
                   </div>
-                  {selectedSheds.length > 0 && (
-                    <button
-                      onClick={clearAllSheds}
-                      className="text-xs font-bold text-red-600 hover:text-red-700 flex items-center gap-1.5 px-3 py-1.5 rounded-lg hover:bg-red-50 transition-all"
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
-                      Clear All
-                    </button>
+                  {masterVoucherPdf && (
+                    <div className="flex flex-col gap-2">
+                      <button
+                        onClick={() => {
+                          setMasterVoucherPdf(null);
+                          setMasterVoucherPdfName(null);
+                          if (masterVoucherPdfUrl) URL.revokeObjectURL(masterVoucherPdfUrl);
+                          setMasterVoucherPdfUrl(null);
+                          setShowPdfPreview(false);
+                        }}
+                        className="p-3 text-red-600 hover:bg-red-50 rounded-xl transition-all border border-transparent hover:border-red-100 flex items-center justify-center gap-2 font-bold text-sm"
+                        title="Remove PDF"
+                      >
+                        <Trash2 className="w-5 h-5" />
+                        Remove
+                      </button>
+                    </div>
                   )}
                 </div>
+              </section>
+
+              {/* Step 3: Add Sheds */}
+              <div className={cn(
+                "grid gap-8 transition-all duration-500",
+                masterVoucherPdf && showPdfPreview ? "grid-cols-1 lg:grid-cols-2" : "grid-cols-1"
+              )}>
+                {masterVoucherPdf && showPdfPreview && (
+                  <motion.section 
+                    initial={{ opacity: 0, x: -20 }}
+                    animate={{ opacity: 1, x: 0 }}
+                    className="bg-white rounded-2xl shadow-sm border border-[#E5E7EB] p-4 h-[calc(100vh-120px)] sticky top-24"
+                  >
+                    <div className="flex items-center justify-between mb-4 px-2">
+                      <div className="flex items-center gap-2">
+                        <FileText className="text-[#0052CC] w-5 h-5" />
+                        <h2 className="text-sm font-bold uppercase tracking-widest text-[#6B7280]">Master Voucher Preview</h2>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        {masterVoucherPdfUrl && (
+                          <a 
+                            href={masterVoucherPdfUrl} 
+                            target="_blank" 
+                            rel="noopener noreferrer"
+                            className="p-2 hover:bg-[#0052CC]/5 rounded-lg text-[#0052CC] transition-colors flex items-center gap-1.5 text-xs font-bold"
+                            title="Open in New Tab"
+                          >
+                            <ExternalLink className="w-4 h-4" />
+                            Full View
+                          </a>
+                        )}
+                        <button 
+                          onClick={() => setShowPdfPreview(false)}
+                          className="p-2 hover:bg-gray-100 rounded-lg text-gray-500 transition-colors"
+                        >
+                          <X className="w-5 h-5" />
+                        </button>
+                      </div>
+                    </div>
+                    <div className="w-full h-[calc(100%-48px)]">
+                      {masterVoucherPdf && <PdfCanvasRenderer pdfData={masterVoucherPdf} />}
+                    </div>
+                  </motion.section>
+                )}
+
+                <section className="bg-white rounded-2xl shadow-sm border border-[#E5E7EB] p-6 h-fit">
+                  <div className="flex items-center justify-between mb-6">
+                    <div className="flex items-center gap-2">
+                      <Building2 className="text-[#0052CC] w-5 h-5" />
+                      <h2 className="text-sm font-bold uppercase tracking-widest text-[#6B7280]">Step 3: Add Consuming Sheds</h2>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      {masterVoucherPdf && !showPdfPreview && (
+                        <button
+                          onClick={() => setShowPdfPreview(true)}
+                          className="text-xs font-bold text-[#0052CC] hover:bg-[#0052CC]/5 px-3 py-1.5 rounded-lg border border-[#0052CC] flex items-center gap-1.5 transition-all"
+                        >
+                          <Eye className="w-3.5 h-3.5" />
+                          Show PDF
+                        </button>
+                      )}
+                      {selectedSheds.length > 0 && (
+                        <button
+                          onClick={clearAllSheds}
+                          className="text-xs font-bold text-red-600 hover:text-red-700 flex items-center gap-1.5 px-3 py-1.5 rounded-lg hover:bg-red-50 transition-all"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                          Clear All
+                        </button>
+                      )}
+                    </div>
+                  </div>
                 
                 <div className="relative mb-8">
                   <div className="relative">
@@ -1028,9 +1617,14 @@ export default function App() {
                               </div>
                             </div>
 
-                            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
+                            <div className={cn(
+                              "grid gap-4",
+                              masterVoucherPdf && showPdfPreview 
+                                ? "grid-cols-1 sm:grid-cols-2 xl:grid-cols-3" 
+                                : "grid-cols-1 sm:grid-cols-2 lg:grid-cols-5"
+                            )}>
                               <div className="space-y-1">
-                                <label className="text-[10px] font-bold text-[#6B7280] uppercase ml-1">Power Car</label>
+                                <label className="text-[10px] font-bold text-[#6B7280] uppercase ml-1 block min-h-[12px]">Power Car</label>
                                 <div className="flex items-center justify-between bg-[#F9FAFB] border border-[#E5E7EB] rounded-xl px-3 h-[42px]">
                                   <input
                                     type="checkbox"
@@ -1043,34 +1637,52 @@ export default function App() {
                               </div>
 
                               <div className="space-y-1">
-                                <label className="text-[10px] font-bold text-[#6B7280] uppercase ml-1">Voucher PDF</label>
-                                <div className="relative h-[42px]">
+                                <label className="text-[10px] font-bold text-[#6B7280] uppercase ml-1 block min-h-[12px]">
+                                  {masterVoucherPdf ? "Voucher Pages" : "Voucher PDF"}
+                                </label>
+                                {masterVoucherPdf ? (
                                   <input
-                                    type="file"
-                                    accept=".pdf"
-                                    onChange={async (e) => {
-                                      const file = e.target.files?.[0];
-                                      if (file) {
-                                        const base64 = await fileToBase64(file);
-                                        updateSelectedShed(shed.instanceId, { voucher_pdf_base64: base64 });
-                                      }
-                                    }}
-                                    className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
+                                    type="text"
+                                    placeholder="e.g. 1-3, 5"
+                                    value={shed.voucher_pages || ''}
+                                    onChange={(e) => updateSelectedShed(shed.instanceId, { voucher_pages: e.target.value })}
+                                    className="w-full bg-[#F9FAFB] border border-[#E5E7EB] rounded-xl px-3 py-2 text-sm font-bold outline-none focus:ring-2 focus:ring-[#0052CC] focus:border-transparent h-[42px]"
                                   />
-                                  <div className={cn(
-                                    "w-full h-full border border-[#E5E7EB] rounded-xl px-3 flex items-center justify-between transition-all",
-                                    shed.voucher_pdf_base64 ? "bg-emerald-50 border-emerald-200 text-emerald-700" : "bg-[#F9FAFB] text-[#6B7280]"
-                                  )}>
-                                    <span className="text-xs font-bold truncate">
-                                      {shed.voucher_pdf_base64 ? "Voucher Attached" : "Click to Upload"}
-                                    </span>
-                                    {shed.voucher_pdf_base64 ? <CheckCircle2 className="w-4 h-4" /> : <Plus className="w-4 h-4" />}
+                                ) : (
+                                  <div className="relative h-[42px]">
+                                    <input
+                                      type="file"
+                                      accept=".pdf"
+                                      onChange={async (e) => {
+                                        const file = e.target.files?.[0];
+                                        if (file) {
+                                          const base64 = await fileToBase64(file);
+                                          updateSelectedShed(shed.instanceId, { 
+                                            voucher_pdf_base64: base64,
+                                            voucher_pdf_name: file.name,
+                                            voucher_pdf_size: file.size.toString(),
+                                            voucher_pdf_type: file.type,
+                                            voucher_pdf_last_modified: file.lastModified
+                                          });
+                                        }
+                                      }}
+                                      className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
+                                    />
+                                    <div className={cn(
+                                      "w-full h-full border border-[#E5E7EB] rounded-xl px-3 flex items-center justify-between transition-all",
+                                      shed.voucher_pdf_base64 ? "bg-emerald-50 border-emerald-200 text-emerald-700" : "bg-[#F9FAFB] text-[#6B7280]"
+                                    )}>
+                                      <span className="text-xs font-bold truncate">
+                                        {shed.voucher_pdf_base64 ? "Voucher Attached" : "Click to Upload"}
+                                      </span>
+                                      {shed.voucher_pdf_base64 ? <CheckCircle2 className="w-4 h-4" /> : <Plus className="w-4 h-4" />}
+                                    </div>
                                   </div>
-                                </div>
+                                )}
                               </div>
 
                               <div className="space-y-1">
-                                <label className="text-[10px] font-bold text-[#6B7280] uppercase ml-1">Coach Litres</label>
+                                <label className="text-[10px] font-bold text-[#6B7280] uppercase ml-1 block min-h-[12px]">Coach Litres</label>
                                 <input
                                   type="number"
                                   value={shed.coach_litres}
@@ -1080,7 +1692,7 @@ export default function App() {
                               </div>
 
                               <div className="space-y-1">
-                                <label className="text-[10px] font-bold text-[#6B7280] uppercase ml-1">Goods Litres</label>
+                                <label className="text-[10px] font-bold text-[#6B7280] uppercase ml-1 block min-h-[12px]">Goods Litres</label>
                                 <input
                                   type="number"
                                   value={shed.goods_litres}
@@ -1094,7 +1706,7 @@ export default function App() {
                               </div>
 
                               <div className="space-y-1">
-                                <label className="text-[10px] font-bold text-[#6B7280] uppercase ml-1">Supplying Shed</label>
+                                <label className="text-[10px] font-bold text-[#6B7280] uppercase ml-1 block min-h-[12px]">Supplying Shed</label>
                                 <select
                                   value={shed.supplying_shed}
                                   onChange={(e) => updateSelectedShed(shed.instanceId, { supplying_shed: e.target.value })}
@@ -1106,20 +1718,27 @@ export default function App() {
                               </div>
 
                               <div className="space-y-1">
-                                <label className="text-[10px] font-bold text-[#6B7280] uppercase ml-1">Pricing Period</label>
+                                <label className="text-[10px] font-bold text-[#6B7280] uppercase ml-1 block min-h-[12px]">Pricing Period</label>
                                 <select
                                   value={shed.pricing_period}
                                   onChange={(e) => updateSelectedShed(shed.instanceId, { pricing_period: e.target.value as any })}
                                   className="w-full bg-[#F9FAFB] border border-[#E5E7EB] rounded-xl px-3 py-2 text-sm font-bold outline-none focus:ring-2 focus:ring-[#0052CC] h-[42px]"
                                 >
-                                  <option value="1st-15th">1st-15th</option>
-                                  <option value="16th-End">16th-End</option>
-                                  <option value="Average">Average</option>
+                                  {(() => {
+                                    const entry = priceMaster.find(p => p.supplying_shed === shed.supplying_shed && p.month === shed.during_month && p.year === shed.during_year);
+                                    return (
+                                      <>
+                                        <option value="p1">{entry?.periodNames?.p1 || '1st-15th'}</option>
+                                        <option value="p2">{entry?.periodNames?.p2 || '16th-End'}</option>
+                                        <option value="average">Average</option>
+                                      </>
+                                    );
+                                  })()}
                                 </select>
                               </div>
 
                               <div className="space-y-1">
-                                <label className="text-[10px] font-bold text-[#6B7280] uppercase ml-1">For Month</label>
+                                <label className="text-[10px] font-bold text-[#6B7280] uppercase ml-1 block min-h-[12px]">For Month</label>
                                 <select
                                   value={shed.for_month}
                                   onChange={(e) => updateSelectedShed(shed.instanceId, { for_month: e.target.value })}
@@ -1130,7 +1749,7 @@ export default function App() {
                               </div>
 
                               <div className="space-y-1">
-                                <label className="text-[10px] font-bold text-[#6B7280] uppercase ml-1">For Year</label>
+                                <label className="text-[10px] font-bold text-[#6B7280] uppercase ml-1 block min-h-[12px]">For Year</label>
                                 <select
                                   value={shed.for_year}
                                   onChange={(e) => updateSelectedShed(shed.instanceId, { for_year: e.target.value })}
@@ -1141,7 +1760,7 @@ export default function App() {
                               </div>
 
                               <div className="space-y-1">
-                                <label className="text-[10px] font-bold text-[#6B7280] uppercase ml-1">During Month</label>
+                                <label className="text-[10px] font-bold text-[#6B7280] uppercase ml-1 block min-h-[12px]">During Month</label>
                                 <select
                                   value={shed.during_month}
                                   onChange={(e) => updateSelectedShed(shed.instanceId, { during_month: e.target.value })}
@@ -1152,7 +1771,7 @@ export default function App() {
                               </div>
 
                               <div className="space-y-1">
-                                <label className="text-[10px] font-bold text-[#6B7280] uppercase ml-1">During Year</label>
+                                <label className="text-[10px] font-bold text-[#6B7280] uppercase ml-1 block min-h-[12px]">During Year</label>
                                 <select
                                   value={shed.during_year}
                                   onChange={(e) => updateSelectedShed(shed.instanceId, { during_year: e.target.value })}
@@ -1174,8 +1793,306 @@ export default function App() {
                   )}
                 </div>
               </section>
+            </div>
 
-              {/* Step 3: Generate */}
+              {/* Step 4: Digital Signature */}
+              <section className="bg-white rounded-2xl shadow-sm border border-[#E5E7EB] p-6">
+                <div className="flex items-center justify-between mb-6">
+                  <div className="flex items-center gap-2">
+                    <Settings className="text-[#0052CC] w-5 h-5" />
+                    <h2 className="text-sm font-bold uppercase tracking-widest text-[#6B7280]">Step 4: Signature Settings</h2>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-bold text-[#6B7280]">Apply Signature</span>
+                    <button
+                      onClick={() => setApplySignature(!applySignature)}
+                      className={cn(
+                        "w-12 h-6 rounded-full transition-all relative",
+                        applySignature ? "bg-[#0052CC]" : "bg-gray-200"
+                      )}
+                    >
+                      <div className={cn(
+                        "absolute top-1 w-4 h-4 bg-white rounded-full transition-all",
+                        applySignature ? "left-7" : "left-1"
+                      )} />
+                    </button>
+                  </div>
+                </div>
+
+                {applySignature && (
+                  <motion.div 
+                    initial={{ opacity: 0, y: -10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    className="space-y-6"
+                  >
+                    <div className="flex gap-4 p-1 bg-[#F3F4F6] rounded-xl w-fit">
+                      <button
+                        onClick={() => setSignatureType('visual')}
+                        className={cn(
+                          "px-4 py-2 rounded-lg text-xs font-bold transition-all",
+                          signatureType === 'visual' ? "bg-white shadow-sm text-[#0052CC]" : "text-[#6B7280] hover:text-[#4B5563]"
+                        )}
+                      >
+                        Visual Stamp
+                      </button>
+                      <button
+                        onClick={() => setSignatureType('digital')}
+                        className={cn(
+                          "px-4 py-2 rounded-lg text-xs font-bold transition-all",
+                          signatureType === 'digital' ? "bg-white shadow-sm text-[#0052CC]" : "text-[#6B7280] hover:text-[#4B5563]"
+                        )}
+                      >
+                        Digital Key (PFX)
+                      </button>
+                      <button
+                        onClick={() => setSignatureType('usb')}
+                        className={cn(
+                          "px-4 py-2 rounded-lg text-xs font-bold transition-all",
+                          signatureType === 'usb' ? "bg-white shadow-sm text-[#0052CC]" : "text-[#6B7280] hover:text-[#4B5563]"
+                        )}
+                      >
+                        USB Token (Local)
+                      </button>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                      <div className="space-y-2">
+                        <label className="text-xs font-bold text-[#6B7280] uppercase ml-1">Signatory Name</label>
+                        <input
+                          type="text"
+                          value={signatoryName}
+                          onChange={(e) => setSignatoryName(e.target.value)}
+                          className="w-full bg-[#F9FAFB] border border-[#E5E7EB] rounded-xl px-4 py-3 text-sm font-medium focus:ring-2 focus:ring-[#0052CC] outline-none"
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <label className="text-xs font-bold text-[#6B7280] uppercase ml-1">Designation/Office</label>
+                        <input
+                          type="text"
+                          value={signatoryDesignation}
+                          onChange={(e) => setSignatoryDesignation(e.target.value)}
+                          className="w-full bg-[#F9FAFB] border border-[#E5E7EB] rounded-xl px-4 py-3 text-sm font-medium focus:ring-2 focus:ring-[#0052CC] outline-none"
+                        />
+                      </div>
+
+                      {signatureType === 'visual' ? (
+                        <div className="space-y-2">
+                          <label className="text-xs font-bold text-[#6B7280] uppercase ml-1">Signature Image (Optional)</label>
+                          <div className="relative h-[46px]">
+                            <input
+                              type="file"
+                              accept="image/*"
+                              onChange={async (e) => {
+                                const file = e.target.files?.[0];
+                                if (file) {
+                                  const base64 = await fileToBase64(file);
+                                  setSignatureImage(base64);
+                                }
+                              }}
+                              className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
+                            />
+                            <div className={cn(
+                              "w-full h-full border border-[#E5E7EB] rounded-xl px-4 flex items-center justify-between transition-all",
+                              signatureImage ? "bg-emerald-50 border-emerald-200 text-emerald-700" : "bg-[#F9FAFB] text-[#6B7280]"
+                            )}>
+                              <span className="text-xs font-bold truncate">
+                                {signatureImage ? "Signature Uploaded" : "Upload PNG/JPG"}
+                              </span>
+                              {signatureImage ? <Check className="w-4 h-4" /> : <Upload className="w-4 h-4" />}
+                            </div>
+                          </div>
+                        </div>
+                      ) : signatureType === 'digital' ? (
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 col-span-1 md:col-span-1">
+                          <div className="space-y-2">
+                            <label className="text-xs font-bold text-[#6B7280] uppercase ml-1">PFX/P12 File</label>
+                            <div className="relative h-[46px]">
+                              <input
+                                type="file"
+                                accept=".pfx,.p12"
+                                onChange={async (e) => {
+                                  const file = e.target.files?.[0];
+                                  if (file) {
+                                    const base64 = await fileToBase64(file);
+                                    setPfxFile(base64);
+                                  }
+                                }}
+                                className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
+                              />
+                              <div className={cn(
+                                "w-full h-full border border-[#E5E7EB] rounded-xl px-4 flex items-center justify-between transition-all",
+                                pfxFile ? "bg-emerald-50 border-emerald-200 text-emerald-700" : "bg-[#F9FAFB] text-[#6B7280]"
+                              )}>
+                                <span className="text-xs font-bold truncate">
+                                  {pfxFile ? "Key Loaded" : "Upload Key"}
+                                </span>
+                                {pfxFile ? <Check className="w-4 h-4" /> : <Upload className="w-4 h-4" />}
+                              </div>
+                            </div>
+                          </div>
+                          <div className="space-y-2">
+                            <label className="text-xs font-bold text-[#6B7280] uppercase ml-1">Key Password</label>
+                            <div className="relative">
+                              <input
+                                type={showPassword ? "text" : "password"}
+                                value={pfxPassword}
+                                onChange={(e) => setPfxPassword(e.target.value)}
+                                className="w-full bg-[#F9FAFB] border border-[#E5E7EB] rounded-xl px-4 py-3 text-sm font-medium focus:ring-2 focus:ring-[#0052CC] outline-none pr-10"
+                                placeholder="Enter password"
+                              />
+                              <button
+                                onClick={() => setShowPassword(!showPassword)}
+                                className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                              >
+                                {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 col-span-1 md:col-span-2">
+                          <div className="space-y-2">
+                            <label className="text-xs font-bold text-[#6B7280] uppercase ml-1">Protocol</label>
+                            <select
+                              value={localSignerProtocol}
+                              onChange={(e) => setLocalSignerProtocol(e.target.value as 'http' | 'https')}
+                              className="w-full bg-[#F9FAFB] border border-[#E5E7EB] rounded-xl px-4 py-3 text-sm font-medium focus:ring-2 focus:ring-[#0052CC] outline-none"
+                            >
+                              <option value="https">HTTPS (Secure)</option>
+                              <option value="http">HTTP (Standard)</option>
+                            </select>
+                          </div>
+                          <div className="space-y-2">
+                            <label className="text-xs font-bold text-[#6B7280] uppercase ml-1">Local Signer Port</label>
+                            <select
+                              value={localSignerPort}
+                              onChange={(e) => setLocalSignerPort(e.target.value)}
+                              className="w-full bg-[#F9FAFB] border border-[#E5E7EB] rounded-xl px-4 py-3 text-sm font-medium focus:ring-2 focus:ring-[#0052CC] outline-none"
+                            >
+                              <optgroup label="DSC Signer Service">
+                                <option value="55103">55103 (v7.x HTTPS)</option>
+                                <option value="55101">55101 (v4.x HTTPS)</option>
+                                <option value="55100">55100 (v4.x HTTP)</option>
+                              </optgroup>
+                              <optgroup label="Other Utilities">
+                                <option value="60015">60015 (EPFO)</option>
+                                <option value="1585">1585 (GST emSigner)</option>
+                                <option value="1620">1620 (Capricorn)</option>
+                              </optgroup>
+                              <optgroup label="Common Ports">
+                                <option value="8080">8080</option>
+                                <option value="5500">5500</option>
+                              </optgroup>
+                            </select>
+                          </div>
+                          <div className="space-y-2 flex flex-col justify-end">
+                            <button
+                              onClick={testSignerConnection}
+                              disabled={signerStatus === 'testing'}
+                              className={cn(
+                                "w-full h-[46px] rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-2",
+                                signerStatus === 'online' ? "bg-emerald-50 text-emerald-700 border border-emerald-200" :
+                                signerStatus === 'offline' ? "bg-red-50 text-red-700 border border-red-200" :
+                                "bg-[#F3F4F6] text-[#6B7280] border border-[#E5E7EB] hover:bg-gray-200"
+                              )}
+                            >
+                              {signerStatus === 'testing' ? (
+                                <div className="w-4 h-4 border-2 border-gray-300 border-t-gray-600 rounded-full animate-spin" />
+                              ) : signerStatus === 'online' ? (
+                                <><Check className="w-4 h-4" /> Service Online</>
+                              ) : signerStatus === 'offline' ? (
+                                <><AlertCircle className="w-4 h-4" /> Service Offline</>
+                              ) : (
+                                "Test Connection"
+                              )}
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                    
+                    {signatureType === 'usb' && (
+                      <div className="space-y-4">
+                        <div className="bg-blue-50 border border-blue-100 rounded-xl p-4 flex gap-3">
+                          <ExternalLink className="w-5 h-5 text-blue-500 shrink-0" />
+                          <div className="space-y-1">
+                            <p className="text-xs font-bold text-blue-800">USB Token Mode Active</p>
+                            <p className="text-[11px] text-blue-700 leading-relaxed">
+                              Ensure your <strong>Hypersecu USB Token</strong> is plugged in and your <strong>Local Signer Service</strong> (e.g., e-Mudhra) is running on your PC. 
+                              When you click generate, the app will send the PDFs to your local service for signing.
+                            </p>
+                          </div>
+                        </div>
+
+                        {signerStatus === 'offline' && (
+                          <div className="bg-red-50 border border-red-100 rounded-xl p-4 space-y-3">
+                            <div className="flex gap-3">
+                              <AlertCircle className="w-5 h-5 text-red-500 shrink-0" />
+                              <div className="space-y-1">
+                                <p className="text-xs font-bold text-red-800">Service Offline? (Troubleshooting)</p>
+                                <p className="text-[11px] text-red-700 leading-relaxed">
+                                  Your browser is blocking the connection to your local computer (Loopback Address Space). 
+                                  This is a common security feature. Follow these steps:
+                                </p>
+                              </div>
+                            </div>
+                            <div className="pl-8 space-y-3">
+                              <div className="bg-white/50 rounded-lg p-3 border border-red-100">
+                                <p className="text-[11px] font-bold text-red-900 mb-1">Solution 1: Open in New Tab (Recommended)</p>
+                                <p className="text-[10px] text-red-700 mb-2">
+                                  iFrames often block local connections. Click the <strong>"Open in new tab"</strong> icon at the top right of this preview window.
+                                </p>
+                              </div>
+
+                              <ol className="text-[11px] text-red-700 list-decimal space-y-1">
+                                <li>Click <strong>"Authorize Service"</strong> to accept the SSL certificate in a new tab.</li>
+                                <li>If it shows "Live" there, return here and click <strong>"Force Online"</strong>.</li>
+                                <li>The "Test Connection" button may stay red due to browser security, but <strong>Force Online</strong> will allow you to proceed.</li>
+                              </ol>
+                              <div className="flex gap-3 pt-1">
+                                <a 
+                                  href={`${localSignerProtocol}://127.0.0.1:${localSignerPort}/check/isLive`}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white border border-red-200 rounded-lg text-[10px] font-bold text-red-600 hover:bg-red-50 transition-all"
+                                >
+                                  <ExternalLink className="w-3 h-3" />
+                                  Authorize Service
+                                </a>
+                                <button
+                                  onClick={() => setSignerStatus('online')}
+                                  className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white border border-red-200 rounded-lg text-[10px] font-bold text-red-600 hover:bg-red-50 transition-all"
+                                >
+                                  <CheckCircle2 className="w-3 h-3" />
+                                  Force Online
+                                </button>
+                              </div>
+                            </div>
+                            
+                            {signerLog.length > 0 && (
+                              <div className="mt-3 bg-black/5 rounded-lg p-3 space-y-1">
+                                <p className="text-[10px] font-bold text-red-800 uppercase opacity-60">Signer Debug Log</p>
+                                {signerLog.map((log, i) => (
+                                  <p key={i} className="text-[9px] font-mono text-red-700 leading-tight">
+                                    {log}
+                                  </p>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </motion.div>
+                )}
+              </section>
+
+              {/* Step 5: Generate */}
+              <section className="bg-white rounded-2xl shadow-sm border border-[#E5E7EB] p-6">
+                <div className="flex items-center gap-2 mb-6">
+                  <CheckCircle2 className="text-[#0052CC] w-5 h-5" />
+                  <h2 className="text-sm font-bold uppercase tracking-widest text-[#6B7280]">Step 5: Final Review & Generate</h2>
+                </div>
                 <div className="flex justify-end gap-4">
                   <button
                     disabled={selectedSheds.length === 0 || selectedSheds.some(s => !calculateAmounts(s)) || isGenerating}
@@ -1213,6 +2130,7 @@ export default function App() {
                     )}
                   </button>
                 </div>
+              </section>
             </motion.div>
           ) : activeTab === 'prices' ? (
             <motion.div
@@ -1309,50 +2227,75 @@ export default function App() {
                                   </td>
                                 )}
                                 <td className="px-6 py-4 font-semibold text-[#6B7280]">
-                                  {period}
+                                  {period === 'average' ? 'Average' : (
+                                    <div className="flex items-center gap-2">
+                                      <input
+                                        type="text"
+                                        value={entry.periodNames[period as 'p1' | 'p2']}
+                                        onChange={(e) => updatePeriodName(entry.id, period as 'p1' | 'p2', e.target.value)}
+                                        className="w-24 bg-transparent border-b border-transparent hover:border-[#E5E7EB] focus:border-[#0052CC] focus:ring-0 p-1 outline-none transition-all text-sm font-semibold"
+                                      />
+                                    </div>
+                                  )}
                                 </td>
                                 <td className="px-6 py-4 text-right font-mono">
                                   <input
                                     type="number"
                                     value={data.base_price}
+                                    disabled={period === 'average'}
                                     onChange={(e) => {
                                       const newVal = parseFloat(e.target.value) || 0;
                                       updatePriceEntry(entry.id, period, { ...data, base_price: newVal });
                                     }}
-                                    className="w-24 text-right bg-transparent border-b border-transparent hover:border-[#E5E7EB] focus:border-[#0052CC] focus:ring-0 p-1 outline-none transition-all"
+                                    className={cn(
+                                      "w-24 text-right bg-transparent border-b border-transparent hover:border-[#E5E7EB] focus:border-[#0052CC] focus:ring-0 p-1 outline-none transition-all",
+                                      period === 'average' && "opacity-50 cursor-not-allowed"
+                                    )}
                                   />
                                 </td>
                                 <td className="px-6 py-4 text-right font-mono">
                                   <input
                                     type="number"
                                     value={data.excise}
+                                    disabled={period === 'average'}
                                     onChange={(e) => {
                                       const newVal = parseFloat(e.target.value) || 0;
                                       updatePriceEntry(entry.id, period, { ...data, excise: newVal });
                                     }}
-                                    className="w-24 text-right bg-transparent border-b border-transparent hover:border-[#E5E7EB] focus:border-[#0052CC] focus:ring-0 p-1 outline-none transition-all"
+                                    className={cn(
+                                      "w-24 text-right bg-transparent border-b border-transparent hover:border-[#E5E7EB] focus:border-[#0052CC] focus:ring-0 p-1 outline-none transition-all",
+                                      period === 'average' && "opacity-50 cursor-not-allowed"
+                                    )}
                                   />
                                 </td>
                                 <td className="px-6 py-4 text-right font-mono">
                                   <input
                                     type="number"
                                     value={data.vat}
+                                    disabled={period === 'average'}
                                     onChange={(e) => {
                                       const newVal = parseFloat(e.target.value) || 0;
                                       updatePriceEntry(entry.id, period, { ...data, vat: newVal });
                                     }}
-                                    className="w-24 text-right bg-transparent border-b border-transparent hover:border-[#E5E7EB] focus:border-[#0052CC] focus:ring-0 p-1 outline-none transition-all"
+                                    className={cn(
+                                      "w-24 text-right bg-transparent border-b border-transparent hover:border-[#E5E7EB] focus:border-[#0052CC] focus:ring-0 p-1 outline-none transition-all",
+                                      period === 'average' && "opacity-50 cursor-not-allowed"
+                                    )}
                                   />
                                 </td>
                                 <td className="px-6 py-4 text-right font-mono">
                                   <input
                                     type="number"
                                     value={data.overhead}
+                                    disabled={period === 'average'}
                                     onChange={(e) => {
                                       const newVal = parseFloat(e.target.value) || 0;
                                       updatePriceEntry(entry.id, period, { ...data, overhead: newVal });
                                     }}
-                                    className="w-24 text-right bg-transparent border-b border-transparent hover:border-[#E5E7EB] focus:border-[#0052CC] focus:ring-0 p-1 outline-none transition-all"
+                                    className={cn(
+                                      "w-24 text-right bg-transparent border-b border-transparent hover:border-[#E5E7EB] focus:border-[#0052CC] focus:ring-0 p-1 outline-none transition-all",
+                                      period === 'average' && "opacity-50 cursor-not-allowed"
+                                    )}
                                   />
                                 </td>
                                 <td className="px-6 py-4 text-right font-bold text-[#0052CC] font-mono">
@@ -1360,7 +2303,7 @@ export default function App() {
                                 </td>
                                 <td className="px-6 py-4">
                                   <div className="flex items-center justify-center gap-2">
-                                    {period !== 'Average' ? (
+                                    {period !== 'average' ? (
                                       <div className="flex items-center gap-2">
                                         <div className="relative">
                                           <input
@@ -1405,13 +2348,13 @@ export default function App() {
                                       </div>
                                     ) : (
                                       <>
-                                        {entry.periods['1st-15th'].pdf_base64 && entry.periods['16th-End'].pdf_base64 ? (
+                                        {entry.periods.p1.pdf_base64 && entry.periods.p2.pdf_base64 ? (
                                           <button
                                             onClick={async () => {
                                               try {
                                                 const mergedPdf = await PDFDocument.create();
-                                                const pdf1 = entry.periods['1st-15th'].pdf_base64!;
-                                                const pdf2 = entry.periods['16th-End'].pdf_base64!;
+                                                const pdf1 = entry.periods.p1.pdf_base64!;
+                                                const pdf2 = entry.periods.p2.pdf_base64!;
                                                 
                                                 const p1Bytes = Uint8Array.from(atob(pdf1.split(',')[1]), c => c.charCodeAt(0));
                                                 const p2Bytes = Uint8Array.from(atob(pdf2.split(',')[1]), c => c.charCodeAt(0));
@@ -1543,7 +2486,10 @@ export default function App() {
                     <button
                       onClick={async () => {
                         if (newShed.shed_name && newShed.railway) {
-                          const shed: ShedMasterEntry = { ...newShed, id: Math.random().toString() } as ShedMasterEntry;
+                          const shed: ShedMasterEntry = { 
+                            ...newShed, 
+                            id: `shed-${Date.now()}-${Math.random().toString(36).substr(2, 5)}` 
+                          } as ShedMasterEntry;
                           try {
                             await fetch('/api/sheds', {
                               method: 'POST',

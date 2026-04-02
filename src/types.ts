@@ -11,10 +11,14 @@ export interface PriceMasterEntry {
   supplying_shed: string;
   month: string;
   year: string;
+  periodNames: {
+    p1: string;
+    p2: string;
+  };
   periods: {
-    '1st-15th': PriceData;
-    '16th-End': PriceData;
-    'Average': PriceData;
+    p1: PriceData;
+    p2: PriceData;
+    average: PriceData;
   };
 }
 
@@ -31,11 +35,16 @@ export interface SelectedShed extends ShedMasterEntry {
   during_month: string;
   during_year: string;
   supplying_shed: string;
-  pricing_period: '1st-15th' | '16th-End' | 'Average';
+  pricing_period: 'p1' | 'p2' | 'average';
   goods_litres: number;
   coach_litres: number;
   is_power_car: boolean;
   voucher_pdf_base64?: string;
+  voucher_pages?: string;
+  voucher_pdf_name?: string;
+  voucher_pdf_size?: string;
+  voucher_pdf_type?: string;
+  voucher_pdf_last_modified?: number;
 }
 
 export const MONTHS = [
@@ -79,10 +88,14 @@ export const INITIAL_PRICE_MASTER: PriceMasterEntry[] = [
     supplying_shed: 'HXP',
     month: 'FEB',
     year: '2026',
+    periodNames: {
+      p1: '1st-15th',
+      p2: '16th-End'
+    },
     periods: {
-      '1st-15th': { base_price: 57309, excise: 17800, vat: 15066, overhead: 2169 },
-      '16th-End': { base_price: 57309, excise: 17800, vat: 15066, overhead: 2169 },
-      'Average': { base_price: 57309, excise: 17800, vat: 15066, overhead: 2169 }
+      p1: { base_price: 57309, excise: 17800, vat: 15066, overhead: 2169 },
+      p2: { base_price: 57309, excise: 17800, vat: 15066, overhead: 2169 },
+      average: { base_price: 57309, excise: 17800, vat: 15066, overhead: 2169 }
     }
   },
   {
@@ -90,10 +103,14 @@ export const INITIAL_PRICE_MASTER: PriceMasterEntry[] = [
     supplying_shed: 'WKR',
     month: 'FEB',
     year: '2026',
+    periodNames: {
+      p1: '1st-15th',
+      p2: '16th-End'
+    },
     periods: {
-      '1st-15th': { base_price: 56755, excise: 17800, vat: 14863, overhead: 1680 },
-      '16th-End': { base_price: 56755, excise: 17800, vat: 14863, overhead: 1680 },
-      'Average': { base_price: 56755, excise: 17800, vat: 14863, overhead: 1680 }
+      p1: { base_price: 56755, excise: 17800, vat: 14863, overhead: 1680 },
+      p2: { base_price: 56755, excise: 17800, vat: 14863, overhead: 1680 },
+      average: { base_price: 56755, excise: 17800, vat: 14863, overhead: 1680 }
     }
   }
 ];
