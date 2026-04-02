@@ -39,7 +39,7 @@ app.get("/api/sheds", (req, res) => {
 
 app.post("/api/sheds", (req, res) => {
   const { id, shed_name, railway } = req.body;
-  db.prepare("INSERT INTO sheds (id, shed_name, railway) VALUES (?, ?, ?)").run(id, shed_name, railway);
+  db.prepare("INSERT OR IGNORE INTO sheds (id, shed_name, railway) VALUES (?, ?, ?)").run(id, shed_name, railway);
   res.json({ success: true });
 });
 
@@ -50,16 +50,41 @@ app.delete("/api/sheds/:id", (req, res) => {
 
 app.get("/api/prices", (req, res) => {
   const prices = db.prepare("SELECT * FROM prices").all();
-  const formattedPrices = prices.map((p: any) => ({
-    ...p,
-    periods: JSON.parse(p.data)
-  }));
+  const formattedPrices = prices.map((p: any) => {
+    const parsedData = JSON.parse(p.data);
+    // Handle legacy data where p.data was just the periods object
+    const periods = parsedData.periods || parsedData;
+    const periodNames = parsedData.periodNames || { p1: '1st-15th', p2: '16th-End' };
+    
+    // Map legacy keys if necessary
+    if (periods['1st-15th']) {
+      periods.p1 = periods['1st-15th'];
+      delete periods['1st-15th'];
+    }
+    if (periods['16th-End']) {
+      periods.p2 = periods['16th-End'];
+      delete periods['16th-End'];
+    }
+    if (periods['Average']) {
+      periods.average = periods['Average'];
+      delete periods['Average'];
+    }
+
+    return {
+      id: p.id,
+      supplying_shed: p.supplying_shed,
+      month: p.month,
+      year: p.year,
+      periodNames,
+      periods
+    };
+  });
   res.json(formattedPrices);
 });
 
 app.post("/api/prices", (req, res) => {
-  const { id, supplying_shed, month, year, periods } = req.body;
-  const data = JSON.stringify(periods);
+  const { id, supplying_shed, month, year, periods, periodNames } = req.body;
+  const data = JSON.stringify({ periods, periodNames });
   db.prepare("INSERT OR REPLACE INTO prices (id, supplying_shed, month, year, data) VALUES (?, ?, ?, ?, ?)")
     .run(id, supplying_shed, month, year, data);
   res.json({ success: true });
