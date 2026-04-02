@@ -54,7 +54,7 @@ This system streamlines the process of auditing and certifying HSD oil expenditu
    ```bash
    npm run dev
    ```
-   The app will be available at `http://localhost:3001`.
+   The app will be available at `http://localhost:3000`.
 
 4. **Build for production**:
    ```bash
@@ -72,8 +72,8 @@ The easiest way to run the application with all its services is using Docker Com
    ```
 
 2. **Access the services**:
-   - **Web Application**: `http://localhost:3001`
-   - **Database Browser (SQLite Web)**: `http://localhost:8081`
+   - **Web Application**: `http://localhost:3000`
+   - **Database Browser (SQLite Web)**: `http://localhost:8080`
 
 ---
 
@@ -102,7 +102,7 @@ The easiest way to run the application with all its services is using Docker Com
 
 ## 🗄️ Database Management
 
-When running via Docker, the **SQLite Web** interface is exposed on host port `8081` (container port `8080`). This tool allows you to:
+When running via Docker, the **SQLite Web** interface is exposed on port `8080`. This tool allows you to:
 - Browse all tables (`sheds`, `prices`).
 - Export data to CSV/JSON.
 - Run custom SQL queries for advanced reporting.

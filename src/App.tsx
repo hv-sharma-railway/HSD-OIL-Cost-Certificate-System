@@ -222,17 +222,18 @@ export default function App() {
         for (const endpoint of endpoints) {
           try {
             addLog(`Trying endpoint: ${endpoint}...`);
+            
+            // EXTREME SIMPLE REQUEST: No custom headers at all
+            // This is the only way to truly avoid the OPTIONS preflight in some browsers
             const response = await fetch(`${baseUrl}${endpoint}`, {
               method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
+              // No headers here - defaults to text/plain or similar
               body: JSON.stringify({
                 pdfData: base64Pdf,
-                data: base64Pdf, // Some signers expect 'data'
+                data: base64Pdf,
                 signatoryName,
-                reason: 'HSD Oil Cost Certificate',
-                location: 'Rajkot'
+                reason: 'HSD Oil Cost Certificate'
               }),
-              // Increase timeout for local services
               signal: AbortSignal.timeout(15000)
             });
 
@@ -2038,10 +2039,18 @@ export default function App() {
                             </div>
                             <div className="pl-8 space-y-3">
                               <div className="bg-white/50 rounded-lg p-3 border border-red-100">
-                                <p className="text-[11px] font-bold text-red-900 mb-1">Solution 1: Open in New Tab (Recommended)</p>
+                                <p className="text-[11px] font-bold text-red-900 mb-1">Solution 2: Fix CORS Block (Required for USB)</p>
                                 <p className="text-[10px] text-red-700 mb-2">
-                                  iFrames often block local connections. Click the <strong>"Open in new tab"</strong> icon at the top right of this preview window.
+                                  Your local signer doesn't allow external connections. You must use a browser extension to bypass this:
                                 </p>
+                                <a 
+                                  href="https://chromewebstore.google.com/detail/allow-cors-access-control/lhobafcepgpndghajponhgebcbdonpfe"
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-[#0052CC] text-white rounded-lg text-[10px] font-bold hover:bg-[#0747A6] transition-all"
+                                >
+                                  Install "Allow CORS" Extension
+                                </a>
                               </div>
 
                               <ol className="text-[11px] text-red-700 list-decimal space-y-1">
@@ -2067,6 +2076,24 @@ export default function App() {
                                   Force Online
                                 </button>
                               </div>
+                            </div>
+
+                            <div className="bg-white/50 rounded-lg p-3 border border-red-100 mt-3">
+                              <p className="text-[11px] font-bold text-red-900 mb-1">Solution 3: Offline Signing (Most Reliable)</p>
+                              <p className="text-[10px] text-red-700 mb-2">
+                                If the browser bridge keeps failing, download the unsigned certificates and use your desktop signing tool.
+                              </p>
+                              <button
+                                onClick={() => {
+                                  setApplySignature(false);
+                                  setActiveTab('generate');
+                                  alert("Signature disabled. You can now generate the ZIP and sign it using your desktop software.");
+                                }}
+                                className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-gray-800 text-white rounded-lg text-[10px] font-bold hover:bg-black transition-all"
+                              >
+                                <Download className="w-3 h-3" />
+                                Use Offline Signing Mode
+                              </button>
                             </div>
                             
                             {signerLog.length > 0 && (

@@ -18,7 +18,7 @@ services:
       - "8080:8080"
     volumes:
       - railway-data:/data
-    command: sqlite_web --host 0.0.0.0 --port 8080 /data/railway.db
+    command: /data/railway.db
     restart: always
 
 volumes:
