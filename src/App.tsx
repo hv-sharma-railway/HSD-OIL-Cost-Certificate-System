@@ -23,9 +23,8 @@ import { motion, AnimatePresence } from 'motion/react';
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import JSZip from 'jszip';
-import { PDFDocument, rgb, StandardFonts } from 'pdf-lib';
+import { PDFDocument } from 'pdf-lib';
 import * as pdfjsLib from 'pdfjs-dist';
-import forge from 'node-forge';
 
 // Set worker source for pdfjs-dist
 const PDF_WORKER_URL = `https://unpkg.com/pdfjs-dist@${pdfjsLib.version}/build/pdf.worker.min.mjs`;
@@ -188,181 +187,6 @@ export default function App() {
   const [masterVoucherPdfName, setMasterVoucherPdfName] = useState<string | null>(null);
   const [masterVoucherPdfUrl, setMasterVoucherPdfUrl] = useState<string | null>(null);
   const [showPdfPreview, setShowPdfPreview] = useState(false);
-  const [signatureImage, setSignatureImage] = useState<string | null>(null);
-  const [signatoryName, setSignatoryName] = useState('Divisional Finance Manager');
-  const [signatoryDesignation, setSignatoryDesignation] = useState('Western Railway, Rajkot');
-  const [applySignature, setApplySignature] = useState(false);
-  const [signatureType, setSignatureType] = useState<'visual' | 'digital' | 'usb'>('visual');
-  const [pfxFile, setPfxFile] = useState<string | null>(null);
-  const [localSignerPort, setLocalSignerPort] = useState('55101');
-  const [localSignerProtocol, setLocalSignerProtocol] = useState<'http' | 'https'>('https');
-  const [signerStatus, setSignerStatus] = useState<'idle' | 'testing' | 'online' | 'offline'>('idle');
-  const [signerLog, setSignerLog] = useState<string[]>([]);
-  const [pfxPassword, setPfxPassword] = useState('');
-  const [showPassword, setShowPassword] = useState(false);
-
-  const signPdf = async (pdfBytes: Uint8Array): Promise<Uint8Array> => {
-    if (!applySignature || !signatureType) return pdfBytes;
-
-    if (signatureType === 'usb') {
-      const addLog = (msg: string) => setSignerLog(prev => [...prev.slice(-4), `${new Date().toLocaleTimeString()}: ${msg}`]);
-      addLog(`Attempting USB sign on port ${localSignerPort}...`);
-
-      try {
-        // More robust base64 conversion
-        const binary = Array.from(pdfBytes).map(b => String.fromCharCode(b)).join('');
-        const base64Pdf = btoa(binary);
-        
-        const baseUrl = `${localSignerProtocol}://127.0.0.1:${localSignerPort}`;
-        
-        // Try common endpoints in order
-        const endpoints = ['/sign', '/signPdf', '/process', '/api/sign'];
-        let lastError = '';
-
-        for (const endpoint of endpoints) {
-          try {
-            addLog(`Trying endpoint: ${endpoint}...`);
-            
-            // EXTREME SIMPLE REQUEST: No custom headers at all
-            // This is the only way to truly avoid the OPTIONS preflight in some browsers
-            const response = await fetch(`${baseUrl}${endpoint}`, {
-              method: 'POST',
-              // No headers here - defaults to text/plain or similar
-              body: JSON.stringify({
-                pdfData: base64Pdf,
-                data: base64Pdf,
-                signatoryName,
-                reason: 'HSD Oil Cost Certificate'
-              }),
-              signal: AbortSignal.timeout(15000)
-            });
-
-            if (response.ok) {
-              const result = await response.json();
-              const signedData = result.signedPdfData || result.data || result.signedData;
-              
-              if (signedData) {
-                addLog(`Success! Signature received from ${endpoint}`);
-                const signedBinary = atob(signedData);
-                const signedBytes = new Uint8Array(signedBinary.length);
-                for (let i = 0; i < signedBinary.length; i++) {
-                  signedBytes[i] = signedBinary.charCodeAt(i);
-                }
-                return signedBytes;
-              }
-            } else {
-              addLog(`Endpoint ${endpoint} returned status ${response.status}`);
-            }
-          } catch (e: any) {
-            lastError = e.message;
-            addLog(`Endpoint ${endpoint} failed: ${e.message}`);
-          }
-        }
-
-        throw new Error(`All signing endpoints failed. Last error: ${lastError}`);
-      } catch (e: any) {
-        addLog(`USB Signing Error: ${e.message}`);
-        console.warn('USB signing failed. Falling back to visual stamp.', e);
-        return pdfBytes;
-      }
-    }
-
-    if (signatureType !== 'digital' || !pfxFile || !pfxPassword) {
-      return pdfBytes;
-    }
-
-    try {
-      const pfxDer = forge.util.decode64(pfxFile.split(',')[1]);
-      const pfxAsn1 = forge.asn1.fromDer(pfxDer);
-      const pfx = forge.pkcs12.pkcs12FromAsn1(pfxAsn1, pfxPassword);
-
-      // Get private key and certificate
-      const keyBags = pfx.getBags({ bagType: forge.pki.oids.pkcs8ShroudedKeyBag });
-      const certBags = pfx.getBags({ bagType: forge.pki.oids.certBag });
-      
-      const privateKey = keyBags[forge.pki.oids.pkcs8ShroudedKeyBag]?.[0]?.key;
-      const certificate = certBags[forge.pki.oids.certBag]?.[0]?.cert;
-
-      if (!privateKey || !certificate) {
-        throw new Error('Could not find private key or certificate in PFX');
-      }
-
-      const pdfDoc = await PDFDocument.load(pdfBytes);
-      const pages = pdfDoc.getPages();
-      const firstPage = pages[0];
-      const { width } = firstPage.getSize();
-
-      const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
-      const boldFont = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
-
-      const sigWidth = 200;
-      const sigHeight = 60;
-      const x = width - sigWidth - 20;
-      const y = 40;
-
-      // Draw signature box
-      firstPage.drawRectangle({
-        x, y, width: sigWidth, height: sigHeight,
-        borderColor: rgb(0, 0.32, 0.8),
-        borderWidth: 1,
-        color: rgb(0.95, 0.97, 1),
-      });
-
-      firstPage.drawText('DIGITALLY SIGNED', {
-        x: x + 10, y: y + sigHeight - 15,
-        size: 10, font: boldFont, color: rgb(0, 0.32, 0.8),
-      });
-
-      const commonName = certificate.subject.getField('CN')?.value || signatoryName;
-      const issuer = certificate.issuer.getField('CN')?.value || 'Unknown Issuer';
-      const now = new Date().toLocaleString('en-IN');
-
-      firstPage.drawText(`Signed by: ${commonName}`, {
-        x: x + 10, y: y + sigHeight - 30,
-        size: 8, font, color: rgb(0.2, 0.2, 0.2),
-      });
-
-      firstPage.drawText(`Issuer: ${issuer}`, {
-        x: x + 10, y: y + sigHeight - 42,
-        size: 7, font, color: rgb(0.4, 0.4, 0.4),
-      });
-
-      firstPage.drawText(`Date: ${now}`, {
-        x: x + 10, y: y + sigHeight - 54,
-        size: 7, font, color: rgb(0.4, 0.4, 0.4),
-      });
-
-      return await pdfDoc.save();
-    } catch (e: any) {
-      console.error('Digital signing error:', e);
-      throw new Error(`Digital signing failed: ${e.message || 'Unknown error'}. Please check your password.`);
-    }
-  };
-
-  const testSignerConnection = async () => {
-    setSignerStatus('testing');
-    try {
-      const baseUrl = `${localSignerProtocol}://127.0.0.1:${localSignerPort}`;
-      // Try common health check endpoints
-      const endpoints = ['/check/isLive', '/isLive', '/status', '/'];
-      let success = false;
-      
-      for (const endpoint of endpoints) {
-        try {
-          const res = await fetch(`${baseUrl}${endpoint}`, { mode: 'no-cors' });
-          // If we get any response (even no-cors opaque), it means service is listening
-          success = true;
-          break;
-        } catch (e) {
-          continue;
-        }
-      }
-      
-      setSignerStatus(success ? 'online' : 'offline');
-    } catch (e) {
-      setSignerStatus('offline');
-    }
-  };
 
   const fileToBase64 = (file: File): Promise<string> => {
     return new Promise((resolve, reject) => {
@@ -784,27 +608,8 @@ export default function App() {
 
         doc.setFont('times', 'normal');
         doc.text('Encl: One statement', 15, lastY + 25);
-        doc.text(`For, ${signatoryName},`, 195, lastY + 25, { align: 'right' });
-        doc.text(signatoryDesignation, 195, lastY + 30, { align: 'right' });
-
-        if (applySignature) {
-          if (signatureImage) {
-            try {
-              doc.addImage(signatureImage, 'PNG', 150, lastY + 5, 40, 15);
-            } catch (e) {
-              console.error('Error adding signature image:', e);
-            }
-          }
-          
-          // Add "Digitally Signed" stamp
-          doc.setFontSize(8);
-          doc.setTextColor(100, 100, 100);
-          const now = new Date().toLocaleString('en-IN');
-          doc.text(`Digitally signed by ${signatoryName}`, 195, lastY + 35, { align: 'right' });
-          doc.text(`Date: ${now}`, 195, lastY + 38, { align: 'right' });
-          doc.setTextColor(0, 0, 0);
-          doc.setFontSize(10);
-        }
+        doc.text('For, Divisional Finance Manager,', 195, lastY + 25, { align: 'right' });
+        doc.text('Western Railway, Rajkot.', 195, lastY + 30, { align: 'right' });
 
         doc.setFont('courier', 'bold');
         doc.text('Ltrs', 160, lastY + 50, { align: 'right' });
@@ -859,21 +664,9 @@ export default function App() {
           }
         });
 
-        const certPdfBytes = doc.output('arraybuffer');
-        let finalCertPdfBytes = new Uint8Array(certPdfBytes);
-
-        if (applySignature) {
-          try {
-            finalCertPdfBytes = await signPdf(finalCertPdfBytes);
-          } catch (e: any) {
-            alert(e.message);
-            setIsGenerating(false);
-            return;
-          }
-        }
-
+        const finalPdfBytes = doc.output('arraybuffer');
         const fileName = `${shed.shed_name}_${shed.railway}_RS_${Math.round(calc.total)}_${shed.coach_litres + (shed.is_power_car ? 0 : shed.goods_litres)}_LITRES_${shed.during_month}${shed.during_year}.pdf`;
-        zip.file(fileName, finalCertPdfBytes);
+        zip.file(fileName, finalPdfBytes);
       }
 
       const zipContent = await zip.generateAsync({ type: 'blob' });
@@ -1079,27 +872,8 @@ export default function App() {
 
         doc.setFont('times', 'normal');
         doc.text('Encl: One statement', 15, lastY + 25);
-        doc.text(`For, ${signatoryName},`, 195, lastY + 25, { align: 'right' });
-        doc.text(signatoryDesignation, 195, lastY + 30, { align: 'right' });
-
-        if (applySignature) {
-          if (signatureImage) {
-            try {
-              doc.addImage(signatureImage, 'PNG', 150, lastY + 5, 40, 15);
-            } catch (e) {
-              console.error('Error adding signature image:', e);
-            }
-          }
-          
-          // Add "Digitally Signed" stamp
-          doc.setFontSize(8);
-          doc.setTextColor(100, 100, 100);
-          const now = new Date().toLocaleString('en-IN');
-          doc.text(`Digitally signed by ${signatoryName}`, 195, lastY + 35, { align: 'right' });
-          doc.text(`Date: ${now}`, 195, lastY + 38, { align: 'right' });
-          doc.setTextColor(0, 0, 0);
-          doc.setFontSize(10);
-        }
+        doc.text('For, Divisional Finance Manager,', 195, lastY + 25, { align: 'right' });
+        doc.text('Western Railway, Rajkot.', 195, lastY + 30, { align: 'right' });
 
         doc.setFont('courier', 'bold');
         doc.text('Ltrs', 160, lastY + 50, { align: 'right' });
@@ -1155,21 +929,10 @@ export default function App() {
         });
 
         const certPdfBytes = doc.output('arraybuffer');
-        let finalCertPdfBytes = new Uint8Array(certPdfBytes);
-
-        if (applySignature) {
-          try {
-            finalCertPdfBytes = await signPdf(finalCertPdfBytes);
-          } catch (e: any) {
-            alert(e.message);
-            setIsGenerating(false);
-            return;
-          }
-        }
         
         // 2. Merge with Voucher and Pricing PDF
         const mergedPdf = await PDFDocument.create();
-        const certPdfDoc = await PDFDocument.load(finalCertPdfBytes);
+        const certPdfDoc = await PDFDocument.load(certPdfBytes);
         const certPages = await mergedPdf.copyPages(certPdfDoc, certPdfDoc.getPageIndices());
         certPages.forEach(p => mergedPdf.addPage(p));
 
@@ -1796,329 +1559,11 @@ export default function App() {
               </section>
             </div>
 
-              {/* Step 4: Digital Signature */}
-              <section className="bg-white rounded-2xl shadow-sm border border-[#E5E7EB] p-6">
-                <div className="flex items-center justify-between mb-6">
-                  <div className="flex items-center gap-2">
-                    <Settings className="text-[#0052CC] w-5 h-5" />
-                    <h2 className="text-sm font-bold uppercase tracking-widest text-[#6B7280]">Step 4: Signature Settings</h2>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs font-bold text-[#6B7280]">Apply Signature</span>
-                    <button
-                      onClick={() => setApplySignature(!applySignature)}
-                      className={cn(
-                        "w-12 h-6 rounded-full transition-all relative",
-                        applySignature ? "bg-[#0052CC]" : "bg-gray-200"
-                      )}
-                    >
-                      <div className={cn(
-                        "absolute top-1 w-4 h-4 bg-white rounded-full transition-all",
-                        applySignature ? "left-7" : "left-1"
-                      )} />
-                    </button>
-                  </div>
-                </div>
-
-                {applySignature && (
-                  <motion.div 
-                    initial={{ opacity: 0, y: -10 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    className="space-y-6"
-                  >
-                    <div className="flex gap-4 p-1 bg-[#F3F4F6] rounded-xl w-fit">
-                      <button
-                        onClick={() => setSignatureType('visual')}
-                        className={cn(
-                          "px-4 py-2 rounded-lg text-xs font-bold transition-all",
-                          signatureType === 'visual' ? "bg-white shadow-sm text-[#0052CC]" : "text-[#6B7280] hover:text-[#4B5563]"
-                        )}
-                      >
-                        Visual Stamp
-                      </button>
-                      <button
-                        onClick={() => setSignatureType('digital')}
-                        className={cn(
-                          "px-4 py-2 rounded-lg text-xs font-bold transition-all",
-                          signatureType === 'digital' ? "bg-white shadow-sm text-[#0052CC]" : "text-[#6B7280] hover:text-[#4B5563]"
-                        )}
-                      >
-                        Digital Key (PFX)
-                      </button>
-                      <button
-                        onClick={() => setSignatureType('usb')}
-                        className={cn(
-                          "px-4 py-2 rounded-lg text-xs font-bold transition-all",
-                          signatureType === 'usb' ? "bg-white shadow-sm text-[#0052CC]" : "text-[#6B7280] hover:text-[#4B5563]"
-                        )}
-                      >
-                        USB Token (Local)
-                      </button>
-                    </div>
-
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                      <div className="space-y-2">
-                        <label className="text-xs font-bold text-[#6B7280] uppercase ml-1">Signatory Name</label>
-                        <input
-                          type="text"
-                          value={signatoryName}
-                          onChange={(e) => setSignatoryName(e.target.value)}
-                          className="w-full bg-[#F9FAFB] border border-[#E5E7EB] rounded-xl px-4 py-3 text-sm font-medium focus:ring-2 focus:ring-[#0052CC] outline-none"
-                        />
-                      </div>
-                      <div className="space-y-2">
-                        <label className="text-xs font-bold text-[#6B7280] uppercase ml-1">Designation/Office</label>
-                        <input
-                          type="text"
-                          value={signatoryDesignation}
-                          onChange={(e) => setSignatoryDesignation(e.target.value)}
-                          className="w-full bg-[#F9FAFB] border border-[#E5E7EB] rounded-xl px-4 py-3 text-sm font-medium focus:ring-2 focus:ring-[#0052CC] outline-none"
-                        />
-                      </div>
-
-                      {signatureType === 'visual' ? (
-                        <div className="space-y-2">
-                          <label className="text-xs font-bold text-[#6B7280] uppercase ml-1">Signature Image (Optional)</label>
-                          <div className="relative h-[46px]">
-                            <input
-                              type="file"
-                              accept="image/*"
-                              onChange={async (e) => {
-                                const file = e.target.files?.[0];
-                                if (file) {
-                                  const base64 = await fileToBase64(file);
-                                  setSignatureImage(base64);
-                                }
-                              }}
-                              className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
-                            />
-                            <div className={cn(
-                              "w-full h-full border border-[#E5E7EB] rounded-xl px-4 flex items-center justify-between transition-all",
-                              signatureImage ? "bg-emerald-50 border-emerald-200 text-emerald-700" : "bg-[#F9FAFB] text-[#6B7280]"
-                            )}>
-                              <span className="text-xs font-bold truncate">
-                                {signatureImage ? "Signature Uploaded" : "Upload PNG/JPG"}
-                              </span>
-                              {signatureImage ? <Check className="w-4 h-4" /> : <Upload className="w-4 h-4" />}
-                            </div>
-                          </div>
-                        </div>
-                      ) : signatureType === 'digital' ? (
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 col-span-1 md:col-span-1">
-                          <div className="space-y-2">
-                            <label className="text-xs font-bold text-[#6B7280] uppercase ml-1">PFX/P12 File</label>
-                            <div className="relative h-[46px]">
-                              <input
-                                type="file"
-                                accept=".pfx,.p12"
-                                onChange={async (e) => {
-                                  const file = e.target.files?.[0];
-                                  if (file) {
-                                    const base64 = await fileToBase64(file);
-                                    setPfxFile(base64);
-                                  }
-                                }}
-                                className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
-                              />
-                              <div className={cn(
-                                "w-full h-full border border-[#E5E7EB] rounded-xl px-4 flex items-center justify-between transition-all",
-                                pfxFile ? "bg-emerald-50 border-emerald-200 text-emerald-700" : "bg-[#F9FAFB] text-[#6B7280]"
-                              )}>
-                                <span className="text-xs font-bold truncate">
-                                  {pfxFile ? "Key Loaded" : "Upload Key"}
-                                </span>
-                                {pfxFile ? <Check className="w-4 h-4" /> : <Upload className="w-4 h-4" />}
-                              </div>
-                            </div>
-                          </div>
-                          <div className="space-y-2">
-                            <label className="text-xs font-bold text-[#6B7280] uppercase ml-1">Key Password</label>
-                            <div className="relative">
-                              <input
-                                type={showPassword ? "text" : "password"}
-                                value={pfxPassword}
-                                onChange={(e) => setPfxPassword(e.target.value)}
-                                className="w-full bg-[#F9FAFB] border border-[#E5E7EB] rounded-xl px-4 py-3 text-sm font-medium focus:ring-2 focus:ring-[#0052CC] outline-none pr-10"
-                                placeholder="Enter password"
-                              />
-                              <button
-                                onClick={() => setShowPassword(!showPassword)}
-                                className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
-                              >
-                                {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                              </button>
-                            </div>
-                          </div>
-                        </div>
-                      ) : (
-                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 col-span-1 md:col-span-2">
-                          <div className="space-y-2">
-                            <label className="text-xs font-bold text-[#6B7280] uppercase ml-1">Protocol</label>
-                            <select
-                              value={localSignerProtocol}
-                              onChange={(e) => setLocalSignerProtocol(e.target.value as 'http' | 'https')}
-                              className="w-full bg-[#F9FAFB] border border-[#E5E7EB] rounded-xl px-4 py-3 text-sm font-medium focus:ring-2 focus:ring-[#0052CC] outline-none"
-                            >
-                              <option value="https">HTTPS (Secure)</option>
-                              <option value="http">HTTP (Standard)</option>
-                            </select>
-                          </div>
-                          <div className="space-y-2">
-                            <label className="text-xs font-bold text-[#6B7280] uppercase ml-1">Local Signer Port</label>
-                            <select
-                              value={localSignerPort}
-                              onChange={(e) => setLocalSignerPort(e.target.value)}
-                              className="w-full bg-[#F9FAFB] border border-[#E5E7EB] rounded-xl px-4 py-3 text-sm font-medium focus:ring-2 focus:ring-[#0052CC] outline-none"
-                            >
-                              <optgroup label="DSC Signer Service">
-                                <option value="55103">55103 (v7.x HTTPS)</option>
-                                <option value="55101">55101 (v4.x HTTPS)</option>
-                                <option value="55100">55100 (v4.x HTTP)</option>
-                              </optgroup>
-                              <optgroup label="Other Utilities">
-                                <option value="60015">60015 (EPFO)</option>
-                                <option value="1585">1585 (GST emSigner)</option>
-                                <option value="1620">1620 (Capricorn)</option>
-                              </optgroup>
-                              <optgroup label="Common Ports">
-                                <option value="8080">8080</option>
-                                <option value="5500">5500</option>
-                              </optgroup>
-                            </select>
-                          </div>
-                          <div className="space-y-2 flex flex-col justify-end">
-                            <button
-                              onClick={testSignerConnection}
-                              disabled={signerStatus === 'testing'}
-                              className={cn(
-                                "w-full h-[46px] rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-2",
-                                signerStatus === 'online' ? "bg-emerald-50 text-emerald-700 border border-emerald-200" :
-                                signerStatus === 'offline' ? "bg-red-50 text-red-700 border border-red-200" :
-                                "bg-[#F3F4F6] text-[#6B7280] border border-[#E5E7EB] hover:bg-gray-200"
-                              )}
-                            >
-                              {signerStatus === 'testing' ? (
-                                <div className="w-4 h-4 border-2 border-gray-300 border-t-gray-600 rounded-full animate-spin" />
-                              ) : signerStatus === 'online' ? (
-                                <><Check className="w-4 h-4" /> Service Online</>
-                              ) : signerStatus === 'offline' ? (
-                                <><AlertCircle className="w-4 h-4" /> Service Offline</>
-                              ) : (
-                                "Test Connection"
-                              )}
-                            </button>
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                    
-                    {signatureType === 'usb' && (
-                      <div className="space-y-4">
-                        <div className="bg-blue-50 border border-blue-100 rounded-xl p-4 flex gap-3">
-                          <ExternalLink className="w-5 h-5 text-blue-500 shrink-0" />
-                          <div className="space-y-1">
-                            <p className="text-xs font-bold text-blue-800">USB Token Mode Active</p>
-                            <p className="text-[11px] text-blue-700 leading-relaxed">
-                              Ensure your <strong>Hypersecu USB Token</strong> is plugged in and your <strong>Local Signer Service</strong> (e.g., e-Mudhra) is running on your PC. 
-                              When you click generate, the app will send the PDFs to your local service for signing.
-                            </p>
-                          </div>
-                        </div>
-
-                        {signerStatus === 'offline' && (
-                          <div className="bg-red-50 border border-red-100 rounded-xl p-4 space-y-3">
-                            <div className="flex gap-3">
-                              <AlertCircle className="w-5 h-5 text-red-500 shrink-0" />
-                              <div className="space-y-1">
-                                <p className="text-xs font-bold text-red-800">Service Offline? (Troubleshooting)</p>
-                                <p className="text-[11px] text-red-700 leading-relaxed">
-                                  Your browser is blocking the connection to your local computer (Loopback Address Space). 
-                                  This is a common security feature. Follow these steps:
-                                </p>
-                              </div>
-                            </div>
-                            <div className="pl-8 space-y-3">
-                              <div className="bg-white/50 rounded-lg p-3 border border-red-100">
-                                <p className="text-[11px] font-bold text-red-900 mb-1">Solution 2: Fix CORS Block (Required for USB)</p>
-                                <p className="text-[10px] text-red-700 mb-2">
-                                  Your local signer doesn't allow external connections. You must use a browser extension to bypass this:
-                                </p>
-                                <a 
-                                  href="https://chromewebstore.google.com/detail/allow-cors-access-control/lhobafcepgpndghajponhgebcbdonpfe"
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                  className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-[#0052CC] text-white rounded-lg text-[10px] font-bold hover:bg-[#0747A6] transition-all"
-                                >
-                                  Install "Allow CORS" Extension
-                                </a>
-                              </div>
-
-                              <ol className="text-[11px] text-red-700 list-decimal space-y-1">
-                                <li>Click <strong>"Authorize Service"</strong> to accept the SSL certificate in a new tab.</li>
-                                <li>If it shows "Live" there, return here and click <strong>"Force Online"</strong>.</li>
-                                <li>The "Test Connection" button may stay red due to browser security, but <strong>Force Online</strong> will allow you to proceed.</li>
-                              </ol>
-                              <div className="flex gap-3 pt-1">
-                                <a 
-                                  href={`${localSignerProtocol}://127.0.0.1:${localSignerPort}/check/isLive`}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                  className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white border border-red-200 rounded-lg text-[10px] font-bold text-red-600 hover:bg-red-50 transition-all"
-                                >
-                                  <ExternalLink className="w-3 h-3" />
-                                  Authorize Service
-                                </a>
-                                <button
-                                  onClick={() => setSignerStatus('online')}
-                                  className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white border border-red-200 rounded-lg text-[10px] font-bold text-red-600 hover:bg-red-50 transition-all"
-                                >
-                                  <CheckCircle2 className="w-3 h-3" />
-                                  Force Online
-                                </button>
-                              </div>
-                            </div>
-
-                            <div className="bg-white/50 rounded-lg p-3 border border-red-100 mt-3">
-                              <p className="text-[11px] font-bold text-red-900 mb-1">Solution 3: Offline Signing (Most Reliable)</p>
-                              <p className="text-[10px] text-red-700 mb-2">
-                                If the browser bridge keeps failing, download the unsigned certificates and use your desktop signing tool.
-                              </p>
-                              <button
-                                onClick={() => {
-                                  setApplySignature(false);
-                                  setActiveTab('generate');
-                                  alert("Signature disabled. You can now generate the ZIP and sign it using your desktop software.");
-                                }}
-                                className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-gray-800 text-white rounded-lg text-[10px] font-bold hover:bg-black transition-all"
-                              >
-                                <Download className="w-3 h-3" />
-                                Use Offline Signing Mode
-                              </button>
-                            </div>
-                            
-                            {signerLog.length > 0 && (
-                              <div className="mt-3 bg-black/5 rounded-lg p-3 space-y-1">
-                                <p className="text-[10px] font-bold text-red-800 uppercase opacity-60">Signer Debug Log</p>
-                                {signerLog.map((log, i) => (
-                                  <p key={i} className="text-[9px] font-mono text-red-700 leading-tight">
-                                    {log}
-                                  </p>
-                                ))}
-                              </div>
-                            )}
-                          </div>
-                        )}
-                      </div>
-                    )}
-                  </motion.div>
-                )}
-              </section>
-
-              {/* Step 5: Generate */}
+              {/* Step 4: Generate */}
               <section className="bg-white rounded-2xl shadow-sm border border-[#E5E7EB] p-6">
                 <div className="flex items-center gap-2 mb-6">
                   <CheckCircle2 className="text-[#0052CC] w-5 h-5" />
-                  <h2 className="text-sm font-bold uppercase tracking-widest text-[#6B7280]">Step 5: Final Review & Generate</h2>
+                  <h2 className="text-sm font-bold uppercase tracking-widest text-[#6B7280]">Step 4: Final Review & Generate</h2>
                 </div>
                 <div className="flex justify-end gap-4">
                   <button
