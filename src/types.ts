@@ -57,6 +57,40 @@ export const YEARS = Array.from({ length: 10 }, (_, i) => (2024 + i).toString())
 export const GOODS_ALLOCATION = '10021227';
 export const COACH_ALLOCATION = '10021127';
 
+export interface Session {
+  id: string;
+  name: string;
+  description: string;
+  created_at: string;
+  updated_at: string;
+  state: {
+    selectedMonth: string;
+    selectedYear: string;
+    selectedSupplyingShed: string;
+    masterVoucherPdf: string | null;
+    masterVoucherPdfName: string | null;
+    selectedSheds: SelectedShed[];
+  };
+}
+
+export interface ConsumptionRecord {
+  id: string;
+  shed_name: string;
+  railway: string;
+  supplying_shed: string;
+  month: string;
+  year: string;
+  during_month: string;
+  during_year: string;
+  goods_litres: number;
+  coach_litres: number;
+  total_litres: number;
+  amount: number;
+  is_power_car: boolean;
+  pricing_period: string;
+  created_at: string;
+}
+
 export const POWER_CAR_ALLOCATIONS = {
   base: '08066031',
   excise: '08066036',

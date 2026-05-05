@@ -17,7 +17,11 @@ import {
   Upload,
   Eye,
   EyeOff,
-  ExternalLink
+  ExternalLink,
+  History,
+  TrendingUp,
+  BarChart3,
+  Save
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { jsPDF } from 'jspdf';
@@ -25,6 +29,10 @@ import autoTable from 'jspdf-autotable';
 import JSZip from 'jszip';
 import { PDFDocument } from 'pdf-lib';
 import * as pdfjsLib from 'pdfjs-dist';
+
+// New Components
+import { Analytics } from './components/Analytics';
+import { Sessions } from './components/Sessions';
 
 // Set worker source for pdfjs-dist
 const PDF_WORKER_URL = `https://unpkg.com/pdfjs-dist@${pdfjsLib.version}/build/pdf.worker.min.mjs`;
@@ -160,11 +168,13 @@ import {
   PriceData,
   SelectedShed,
   GOODS_ALLOCATION,
-  COACH_ALLOCATION
+  COACH_ALLOCATION,
+  Session,
+  ConsumptionRecord
 } from './types';
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<'generate' | 'prices' | 'sheds'>('generate');
+  const [activeTab, setActiveTab] = useState<'generate' | 'prices' | 'sheds' | 'sessions' | 'analytics'>('generate');
   const [selectedMonth, setSelectedMonth] = useState(() => {
     const d = new Date();
     d.setMonth(d.getMonth() - 1);
@@ -188,6 +198,14 @@ export default function App() {
   const [masterVoucherPdfUrl, setMasterVoucherPdfUrl] = useState<string | null>(null);
   const [showPdfPreview, setShowPdfPreview] = useState(false);
 
+  // Sessions & Analytics State
+  const [sessions, setSessions] = useState<Session[]>([]);
+  const [consumptionRecords, setConsumptionRecords] = useState<ConsumptionRecord[]>([]);
+  const [isSavingSession, setIsSavingSession] = useState(false);
+  const [sessionName, setSessionName] = useState('');
+  const [sessionDesc, setSessionDesc] = useState('');
+  const [showSaveSessionModal, setShowSaveSessionModal] = useState(false);
+
   const fileToBase64 = (file: File): Promise<string> => {
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
@@ -210,15 +228,21 @@ export default function App() {
   useEffect(() => {
     const fetchData = async () => {
       try {
-        const [shedsRes, pricesRes] = await Promise.all([
+        const [shedsRes, pricesRes, sessionsRes, analyticsRes] = await Promise.all([
           fetch('/api/sheds'),
-          fetch('/api/prices')
+          fetch('/api/prices'),
+          fetch('/api/sessions'),
+          fetch('/api/analytics')
         ]);
         const sheds = await shedsRes.json();
         const prices = await pricesRes.json();
+        const loadedSessions = await sessionsRes.json();
+        const loadedAnalytics = await analyticsRes.json();
         
         setShedMaster(sheds.length > 0 ? sheds : INITIAL_SHED_MASTER);
         setPriceMaster(prices.length > 0 ? prices : INITIAL_PRICE_MASTER);
+        setSessions(loadedSessions);
+        setConsumptionRecords(loadedAnalytics);
 
         // If initial data was empty, populate DB with defaults
         if (sheds.length === 0) {
@@ -674,6 +698,9 @@ export default function App() {
       link.href = URL.createObjectURL(zipContent);
       link.download = `HSD_Certificates_Only_${selectedMonth}_${selectedYear}.zip`;
       link.click();
+      
+      // Record for analytics
+      recordAnalytics();
     } catch (error) {
       console.error('Error generating ZIP:', error);
       alert('Error generating certificates. Please check console for details.');
@@ -685,6 +712,118 @@ export default function App() {
   const clearAllSheds = () => {
     if (window.confirm('Are you sure you want to clear all added sheds?')) {
       setSelectedSheds([]);
+    }
+  };
+
+  const saveCurrentSession = async () => {
+    if (!sessionName) return alert('Please enter a session name');
+    setIsSavingSession(true);
+    const newSession: Session = {
+      id: Math.random().toString(36).substr(2, 9),
+      name: sessionName,
+      description: sessionDesc,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+      state: {
+        selectedMonth,
+        selectedYear,
+        selectedSupplyingShed,
+        masterVoucherPdf,
+        masterVoucherPdfName,
+        selectedSheds
+      }
+    };
+    try {
+      await fetch('/api/sessions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(newSession)
+      });
+      setSessions(prev => [newSession, ...prev.filter(s => s.id !== newSession.id)]);
+      setShowSaveSessionModal(false);
+      setSessionName('');
+      setSessionDesc('');
+    } catch (e) {
+      console.error('Save session error:', e);
+      alert('Error saving session');
+    } finally {
+      setIsSavingSession(false);
+    }
+  };
+
+  const deleteSession = async (id: string) => {
+    try {
+      await fetch(`/api/sessions/${id}`, { method: 'DELETE' });
+      setSessions(prev => prev.filter(s => s.id !== id));
+    } catch (e) {
+      console.error('Delete session error:', e);
+    }
+  };
+
+  const loadSession = (session: Session) => {
+    const { state } = session;
+    setSelectedMonth(state.selectedMonth);
+    setSelectedYear(state.selectedYear);
+    setSelectedSupplyingShed(state.selectedSupplyingShed);
+    setMasterVoucherPdf(state.masterVoucherPdf);
+    setMasterVoucherPdfName(state.masterVoucherPdfName);
+    setSelectedSheds(state.selectedSheds);
+    
+    // Revoke old URL and create new one if pdf exists
+    if (masterVoucherPdfUrl) URL.revokeObjectURL(masterVoucherPdfUrl);
+    if (state.masterVoucherPdf) {
+      try {
+        const base64Content = state.masterVoucherPdf.includes(',') ? state.masterVoucherPdf.split(',')[1] : state.masterVoucherPdf;
+        const binaryString = atob(base64Content);
+        const bytes = new Uint8Array(binaryString.length);
+        for (let i = 0; i < binaryString.length; i++) {
+          bytes[i] = binaryString.charCodeAt(i);
+        }
+        const blob = new Blob([bytes], { type: 'application/pdf' });
+        const url = URL.createObjectURL(blob);
+        setMasterVoucherPdfUrl(url);
+      } catch (e) {
+        console.error('Error creating PDF URL from session:', e);
+      }
+    } else {
+      setMasterVoucherPdfUrl(null);
+    }
+    
+    setActiveTab('generate');
+  };
+
+  const recordAnalytics = async () => {
+    const records: Partial<ConsumptionRecord>[] = selectedSheds.map(shed => {
+      const calc = calculateAmounts(shed);
+      return {
+        id: Math.random().toString(36).substr(2, 9),
+        shed_name: shed.shed_name,
+        railway: shed.railway,
+        supplying_shed: shed.supplying_shed,
+        month: selectedMonth,
+        year: selectedYear,
+        during_month: shed.during_month,
+        during_year: shed.during_year,
+        goods_litres: shed.goods_litres,
+        coach_litres: shed.coach_litres,
+        total_litres: shed.goods_litres + shed.coach_litres,
+        amount: calc?.total || 0,
+        is_power_car: shed.is_power_car,
+        pricing_period: shed.pricing_period
+      };
+    });
+
+    try {
+      await fetch('/api/analytics/batch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(records)
+      });
+      const analyticsRes = await fetch('/api/analytics');
+      const updatedAnalytics = await analyticsRes.json();
+      setConsumptionRecords(updatedAnalytics);
+    } catch (e) {
+      console.error('Record analytics error:', e);
     }
   };
 
@@ -1016,6 +1155,9 @@ export default function App() {
       link.href = URL.createObjectURL(zipContent);
       link.download = `HSD_Certificates_${selectedMonth}_${selectedYear}.zip`;
       link.click();
+
+      // Record for analytics
+      recordAnalytics();
     } catch (error) {
       console.error('Error generating ZIP:', error);
       alert('Error generating certificates. Please check console for details.');
@@ -1069,6 +1211,26 @@ export default function App() {
               <Building2 className="w-4 h-4" />
               Shed Master
             </button>
+            <button
+              onClick={() => setActiveTab('sessions')}
+              className={cn(
+                "px-4 py-2 rounded-lg text-sm font-semibold transition-all duration-200 flex items-center gap-2",
+                activeTab === 'sessions' ? "bg-white text-[#0052CC] shadow-sm" : "text-[#6B7280] hover:text-[#1A1A1A]"
+              )}
+            >
+              <History className="w-4 h-4" />
+              Sessions
+            </button>
+            <button
+              onClick={() => setActiveTab('analytics')}
+              className={cn(
+                "px-4 py-2 rounded-lg text-sm font-semibold transition-all duration-200 flex items-center gap-2",
+                activeTab === 'analytics' ? "bg-white text-[#0052CC] shadow-sm" : "text-[#6B7280] hover:text-[#1A1A1A]"
+              )}
+            >
+              <TrendingUp className="w-4 h-4" />
+              Analytics
+            </button>
           </nav>
         </div>
       </header>
@@ -1083,6 +1245,74 @@ export default function App() {
               exit={{ opacity: 0, y: -10 }}
               className="space-y-8"
             >
+              {/* Save Session Modal */}
+              <AnimatePresence>
+                {showSaveSessionModal && (
+                  <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
+                    <motion.div
+                      initial={{ scale: 0.9, opacity: 0 }}
+                      animate={{ scale: 1, opacity: 1 }}
+                      exit={{ scale: 0.9, opacity: 0 }}
+                      className="bg-white rounded-3xl p-8 max-w-md w-full shadow-2xl space-y-6"
+                    >
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-3">
+                          <div className="bg-[#0052CC]/10 p-2 rounded-xl text-[#0052CC]">
+                            <Save className="w-6 h-6" />
+                          </div>
+                          <h3 className="text-xl font-bold">Save Current Session</h3>
+                        </div>
+                        <button onClick={() => setShowSaveSessionModal(false)} className="p-2 hover:bg-gray-100 rounded-full transition-colors">
+                          <X className="w-5 h-5 text-gray-400" />
+                        </button>
+                      </div>
+                      
+                      <div className="space-y-4">
+                        <div className="space-y-1.5">
+                          <label className="text-xs font-bold text-gray-500 uppercase ml-1">Session Name</label>
+                          <input
+                            type="text"
+                            placeholder="e.g. Feb 2026 Batch A"
+                            value={sessionName}
+                            onChange={(e) => setSessionName(e.target.value)}
+                            className="w-full bg-gray-50 border border-gray-200 rounded-xl px-4 py-3 text-sm font-bold focus:ring-2 focus:ring-[#0052CC] outline-none"
+                          />
+                        </div>
+                        <div className="space-y-1.5">
+                          <label className="text-xs font-bold text-gray-500 uppercase ml-1">Description (Optional)</label>
+                          <textarea
+                            placeholder="Add notes about this session..."
+                            value={sessionDesc}
+                            onChange={(e) => setSessionDesc(e.target.value)}
+                            className="w-full bg-gray-50 border border-gray-200 rounded-xl px-4 py-3 text-sm font-medium focus:ring-2 focus:ring-[#0052CC] outline-none min-h-[100px] resize-none"
+                          />
+                        </div>
+                      </div>
+
+                      <div className="pt-4 flex gap-3">
+                        <button
+                          onClick={() => setShowSaveSessionModal(false)}
+                          className="flex-1 px-4 py-3 rounded-xl font-bold text-sm text-gray-500 hover:bg-gray-50 transition-all"
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          onClick={saveCurrentSession}
+                          disabled={isSavingSession || !sessionName}
+                          className="flex-3 bg-[#0052CC] text-white px-8 py-3 rounded-xl font-bold text-sm shadow-lg shadow-[#0052CC]/20 hover:scale-[1.02] transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                        >
+                          {isSavingSession ? (
+                            <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                          ) : (
+                            <Save className="w-4 h-4" />
+                          )}
+                          Save Session
+                        </button>
+                      </div>
+                    </motion.div>
+                  </div>
+                )}
+              </AnimatePresence>
               {/* Step 1: Global Config */}
               <section className="bg-white rounded-2xl shadow-sm border border-[#E5E7EB] p-6">
                 <div className="flex items-center gap-2 mb-6">
@@ -1255,6 +1485,15 @@ export default function App() {
                       <h2 className="text-sm font-bold uppercase tracking-widest text-[#6B7280]">Step 3: Add Consuming Sheds</h2>
                     </div>
                     <div className="flex items-center gap-3">
+                      {selectedSheds.length > 0 && (
+                        <button
+                          onClick={() => setShowSaveSessionModal(true)}
+                          className="text-xs font-bold text-emerald-600 hover:text-emerald-700 flex items-center gap-1.5 px-3 py-1.5 rounded-lg hover:bg-emerald-50 transition-all border border-emerald-200"
+                        >
+                          <Save className="w-3.5 h-3.5" />
+                          Save Session
+                        </button>
+                      )}
                       {masterVoucherPdf && !showPdfPreview && (
                         <button
                           onClick={() => setShowPdfPreview(true)}
@@ -1603,6 +1842,32 @@ export default function App() {
                   </button>
                 </div>
               </section>
+            </motion.div>
+          ) : activeTab === 'sessions' ? (
+            <motion.div
+              key="sessions"
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -10 }}
+            >
+              <div className="mb-8">
+                <h2 className="text-2xl font-black text-[#1A1A1A]">Work Sessions</h2>
+                <p className="text-sm text-[#6B7280] font-medium">Resume your saved progress or manage previous certificate generations.</p>
+              </div>
+              <Sessions sessions={sessions} onLoad={loadSession} onDelete={deleteSession} />
+            </motion.div>
+          ) : activeTab === 'analytics' ? (
+            <motion.div
+              key="analytics"
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -10 }}
+            >
+              <div className="mb-8">
+                <h2 className="text-2xl font-black text-[#1A1A1A]">Oil Consumption Analytics</h2>
+                <p className="text-sm text-[#6B7280] font-medium">Visualizing HSD oil usage patterns, costs, and trends across all railway sheds.</p>
+              </div>
+              <Analytics records={consumptionRecords} />
             </motion.div>
           ) : activeTab === 'prices' ? (
             <motion.div

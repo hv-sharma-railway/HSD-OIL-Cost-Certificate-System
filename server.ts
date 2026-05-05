@@ -25,6 +25,33 @@ db.exec(`
     year TEXT NOT NULL,
     data TEXT NOT NULL
   );
+
+  CREATE TABLE IF NOT EXISTS sessions (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    description TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    state TEXT NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS consumption_records (
+    id TEXT PRIMARY KEY,
+    shed_name TEXT NOT NULL,
+    railway TEXT NOT NULL,
+    supplying_shed TEXT NOT NULL,
+    month TEXT NOT NULL,
+    year TEXT NOT NULL,
+    during_month TEXT NOT NULL,
+    during_year TEXT NOT NULL,
+    goods_litres REAL NOT NULL,
+    coach_litres REAL NOT NULL,
+    total_litres REAL NOT NULL,
+    amount REAL NOT NULL,
+    is_power_car INTEGER NOT NULL,
+    pricing_period TEXT NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
 `);
 
 const app = express();
@@ -32,6 +59,55 @@ app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
 // API Routes
+app.get("/api/sessions", (req, res) => {
+  const sessions = db.prepare("SELECT * FROM sessions ORDER BY updated_at DESC").all();
+  res.json(sessions.map((s: any) => ({ ...s, state: JSON.parse(s.state) })));
+});
+
+app.post("/api/sessions", (req, res) => {
+  const { id, name, description, state } = req.body;
+  const stateStr = JSON.stringify(state);
+  db.prepare(`
+    INSERT OR REPLACE INTO sessions (id, name, description, state, updated_at) 
+    VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+  `).run(id, name, description, stateStr);
+  res.json({ success: true });
+});
+
+app.delete("/api/sessions/:id", (req, res) => {
+  db.prepare("DELETE FROM sessions WHERE id = ?").run(req.params.id);
+  res.json({ success: true });
+});
+
+app.get("/api/analytics", (req, res) => {
+  const records = db.prepare("SELECT * FROM consumption_records ORDER BY year DESC, month DESC").all();
+  res.json(records);
+});
+
+app.post("/api/analytics/batch", (req, res) => {
+  const records = req.body; // Array of records
+  const insert = db.prepare(`
+    INSERT INTO consumption_records (
+      id, shed_name, railway, supplying_shed, month, year, 
+      during_month, during_year, goods_litres, coach_litres, 
+      total_litres, amount, is_power_car, pricing_period
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+
+  const transaction = db.transaction((recs) => {
+    for (const r of recs) {
+      insert.run(
+        r.id, r.shed_name, r.railway, r.supplying_shed, r.month, r.year,
+        r.during_month, r.during_year, r.goods_litres, r.coach_litres,
+        r.total_litres, r.amount, r.is_power_car ? 1 : 0, r.pricing_period
+      );
+    }
+  });
+
+  transaction(records);
+  res.json({ success: true });
+});
+
 app.get("/api/sheds", (req, res) => {
   const sheds = db.prepare("SELECT * FROM sheds").all();
   res.json(sheds);
