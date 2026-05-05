@@ -1363,16 +1363,19 @@ export default function App() {
                     <History className="w-5 h-5 text-[#0052CC]" />
                   </div>
                   <div>
-                    <p className={cn(
-                      "text-[10px] font-black uppercase tracking-[0.2em] mb-0.5",
-                      currentSessionId ? "text-[#0052CC]" : "text-[#6B7280]"
+                    <div className={cn(
+                      "flex items-center gap-1.5 mb-0.5 px-2 py-0.5 rounded-full w-fit",
+                      currentSessionId ? "bg-emerald-50 text-emerald-700" : "bg-gray-100 text-gray-500"
                     )}>
-                      {currentSessionId ? '● Active Processing' : 'Fresh Session'}
-                    </p>
-                    <h2 className="text-base font-black text-[#1A1A1A]">
+                      <span className="w-1.5 h-1.5 rounded-full bg-current animate-pulse" />
+                      <p className="text-[9px] font-black uppercase tracking-[0.15em]">
+                        {currentSessionId ? 'Active Session' : 'Draft Session'}
+                      </p>
+                    </div>
+                    <h2 className="text-sm font-black text-[#1A1A1A] line-clamp-1">
                       {currentSessionId 
                         ? sessions.find(s => s.id === currentSessionId)?.name || 'Loading...'
-                        : 'Draft Work Log'}
+                        : 'New Performance Log'}
                     </h2>
                   </div>
                 </div>
@@ -1634,15 +1637,6 @@ export default function App() {
                       <h2 className="text-sm font-bold uppercase tracking-widest text-[#6B7280]">Step 3: Add Consuming Sheds</h2>
                     </div>
                     <div className="flex items-center gap-3">
-                      {selectedSheds.length > 0 && (
-                        <button
-                          onClick={() => setShowSaveSessionModal(true)}
-                          className="text-xs font-bold text-emerald-600 hover:text-emerald-700 flex items-center gap-1.5 px-3 py-1.5 rounded-lg hover:bg-emerald-50 transition-all border border-emerald-200"
-                        >
-                          <Save className="w-3.5 h-3.5" />
-                          Save Progress
-                        </button>
-                      )}
                       {masterVoucherPdf && !showPdfPreview && (
                         <button
                           onClick={() => setShowPdfPreview(true)}
@@ -1947,49 +1941,74 @@ export default function App() {
               </section>
             </div>
 
-              {/* Step 4: Generate */}
-              <section className="bg-white rounded-2xl shadow-sm border border-[#E5E7EB] p-6">
-                <div className="flex items-center gap-2 mb-6">
+              {/* Step 4: Final Review & Generate */}
+              <section className="bg-white rounded-2xl shadow-sm border border-[#E5E7EB] p-6 lg:p-8">
+                <div className="flex items-center gap-2 mb-8">
                   <CheckCircle2 className="text-[#0052CC] w-5 h-5" />
-                  <h2 className="text-sm font-bold uppercase tracking-widest text-[#6B7280]">Step 4: Final Review & Generate</h2>
+                  <h2 className="text-sm font-bold uppercase tracking-[0.2em] text-[#6B7280]">Step 4: Final Review & Generate</h2>
                 </div>
                 
-                <div className="flex flex-col md:flex-row md:items-center justify-between gap-6">
-                  <div className="flex items-center gap-3 bg-white p-5 rounded-2xl border border-gray-100 flex-1 shadow-sm">
-                    <input
-                      type="checkbox"
-                      id="autoComplete"
-                      checked={autoCompleteOnGenerate}
-                      onChange={async (e) => {
-                        setAutoCompleteOnGenerate(e.target.checked);
-                        if (e.target.checked && !currentSessionId) {
-                          // Silently create a session if one doesn't exist yet
-                          await saveCurrentSession(true);
-                        }
-                      }}
-                      className="w-6 h-6 rounded-lg border-gray-300 text-[#0052CC] focus:ring-[#0052CC] cursor-pointer"
-                    />
-                    <label htmlFor="autoComplete" className="text-sm font-bold text-[#1A1A1A] cursor-pointer select-none leading-tight">
-                      Automatically mark work log as <span className="text-emerald-600">Completed</span> after generation
-                      <p className="text-[10px] font-medium text-gray-500 mt-1 uppercase tracking-tight">Syncs analytics data to dashboard</p>
-                    </label>
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 items-stretch">
+                  {/* Left: Session Lifecycle Management */}
+                  <div className="bg-[#F9FAFB] rounded-3xl border border-[#E5E7EB] p-6 flex flex-col justify-between">
+                    <div>
+                      <div className="flex items-start justify-between mb-2">
+                        <h3 className="font-bold text-[#1A1A1A]">Work Log Lifecycle</h3>
+                        <span className={cn(
+                          "px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-wider",
+                          currentSessionId ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-700"
+                        )}>
+                          {currentSessionId ? 'Session Saved' : 'Temporary Draft'}
+                        </span>
+                      </div>
+                      <p className="text-xs text-[#6B7280] leading-relaxed mb-6">
+                        Manage how this generation is tracked in your persistent history and analytics dashboard.
+                      </p>
+                    </div>
+
+                    <div className="space-y-4">
+                      <button
+                        onClick={() => setShowSaveSessionModal(true)}
+                        className="w-full bg-white border border-[#E5E7EB] hover:border-[#0052CC] text-[#1A1A1A] hover:text-[#0052CC] p-4 rounded-2xl font-bold text-sm transition-all flex items-center justify-center gap-2 shadow-sm group active:scale-95"
+                      >
+                        <Save className="w-4 h-4" />
+                        {currentSessionId ? 'Update Saved Work Log' : 'Save as New Work Log'}
+                      </button>
+
+                      <div className="flex items-center gap-3 bg-white p-4 rounded-2xl border border-gray-100 shadow-sm">
+                        <input
+                          type="checkbox"
+                          id="autoComplete"
+                          checked={autoCompleteOnGenerate}
+                          onChange={async (e) => {
+                            setAutoCompleteOnGenerate(e.target.checked);
+                            if (e.target.checked && !currentSessionId) {
+                              await saveCurrentSession(true);
+                            }
+                          }}
+                          className="w-6 h-6 rounded-lg border-gray-300 text-[#0052CC] focus:ring-[#0052CC] cursor-pointer"
+                        />
+                        <label htmlFor="autoComplete" className="text-sm font-bold text-[#1A1A1A] cursor-pointer select-none leading-tight">
+                          Finalize & Archive on Download
+                          <p className="text-[10px] font-medium text-emerald-600 mt-1 uppercase tracking-tight">Syncs data to analytics automatically</p>
+                        </label>
+                      </div>
+                    </div>
                   </div>
 
-                  <div className="flex flex-col sm:flex-row gap-4">
+                  {/* Right: Generation Actions */}
+                  <div className="flex flex-col gap-4">
                     <button
                       disabled={selectedSheds.length === 0 || selectedSheds.some(s => !calculateAmounts(s)) || isGenerating}
                       onClick={generateCertificatesOnlyZip}
-                      className="bg-white border-2 border-[#0052CC] text-[#0052CC] disabled:border-[#E5E7EB] disabled:text-[#9CA3AF] disabled:cursor-not-allowed px-6 py-4 rounded-2xl font-bold text-base shadow-sm hover:bg-[#0052CC]/5 transition-all flex items-center gap-3 active:scale-95"
+                      className="flex-1 bg-white border-2 border-[#0052CC] text-[#0052CC] disabled:border-[#E5E7EB] disabled:text-[#9CA3AF] disabled:cursor-not-allowed p-6 rounded-3xl font-bold text-lg shadow-sm hover:bg-[#0052CC]/5 transition-all flex flex-col items-center justify-center gap-2 active:scale-[0.98]"
                     >
                       {isGenerating ? (
-                        <>
-                          <div className="w-5 h-5 border-2 border-[#0052CC]/30 border-t-[#0052CC] rounded-full animate-spin" />
-                          Generating...
-                        </>
+                        <div className="w-8 h-8 border-3 border-[#0052CC]/30 border-t-[#0052CC] rounded-full animate-spin" />
                       ) : (
                         <>
-                          <FileText className="w-5 h-5" />
-                          Download Certificates Only
+                          <FileText className="w-8 h-8 mb-1" />
+                          <span>Download Certificates Only</span>
                         </>
                       )}
                     </button>
@@ -1997,17 +2016,14 @@ export default function App() {
                     <button
                       disabled={selectedSheds.length === 0 || selectedSheds.some(s => !calculateAmounts(s)) || isGenerating}
                       onClick={generateCertificatesZip}
-                      className="bg-[#0052CC] disabled:bg-[#E5E7EB] disabled:cursor-not-allowed text-white px-8 py-4 rounded-2xl font-bold text-base shadow-lg shadow-[#0052CC]/20 hover:shadow-xl hover:shadow-[#0052CC]/30 transition-all flex items-center gap-3 active:scale-95"
+                      className="flex-1 bg-[#0052CC] disabled:bg-[#E5E7EB] disabled:cursor-not-allowed text-white p-6 rounded-3xl font-bold text-lg shadow-lg shadow-[#0052CC]/20 hover:shadow-xl hover:shadow-[#0052CC]/30 transition-all flex flex-col items-center justify-center gap-2 active:scale-[0.98]"
                     >
                       {isGenerating ? (
-                        <>
-                          <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                          Generating ZIP...
-                        </>
+                        <div className="w-8 h-8 border-3 border-white/30 border-t-white rounded-full animate-spin" />
                       ) : (
                         <>
-                          <Download className="w-5 h-5" />
-                          Generate Full ZIP
+                          <Download className="w-8 h-8 mb-1" />
+                          <span>Download Full Package (ZIP)</span>
                         </>
                       )}
                     </button>
