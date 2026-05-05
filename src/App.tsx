@@ -208,6 +208,7 @@ export default function App() {
   const [sessionName, setSessionName] = useState('');
   const [sessionDesc, setSessionDesc] = useState('');
   const [sessionStatus, setSessionStatus] = useState<'in_progress' | 'completed'>('in_progress');
+  const isCompleted = sessionStatus === 'completed';
   const [isSavingSession, setIsSavingSession] = useState(false);
 
   useEffect(() => {
@@ -1401,6 +1402,7 @@ export default function App() {
                   <div className="space-y-2">
                     <label className="text-xs font-bold text-[#6B7280] uppercase ml-1">For the month of</label>
                     <select
+                      disabled={isCompleted}
                       value={selectedMonth}
                       onChange={(e) => setSelectedMonth(e.target.value)}
                       className="w-full bg-[#F9FAFB] border border-[#E5E7EB] rounded-xl px-4 py-3 text-sm font-medium focus:ring-2 focus:ring-[#0052CC] focus:border-transparent transition-all outline-none"
@@ -1411,6 +1413,7 @@ export default function App() {
                   <div className="space-y-2">
                     <label className="text-xs font-bold text-[#6B7280] uppercase ml-1">Year</label>
                     <select
+                      disabled={isCompleted}
                       value={selectedYear}
                       onChange={(e) => setSelectedYear(e.target.value)}
                       className="w-full bg-[#F9FAFB] border border-[#E5E7EB] rounded-xl px-4 py-3 text-sm font-medium focus:ring-2 focus:ring-[#0052CC] focus:border-transparent transition-all outline-none"
@@ -1421,6 +1424,7 @@ export default function App() {
                   <div className="space-y-2">
                     <label className="text-xs font-bold text-[#6B7280] uppercase ml-1">Supplying Shed</label>
                     <select
+                      disabled={isCompleted}
                       value={selectedSupplyingShed}
                       onChange={(e) => setSelectedSupplyingShed(e.target.value)}
                       className="w-full bg-[#F9FAFB] border border-[#E5E7EB] rounded-xl px-4 py-3 text-sm font-medium focus:ring-2 focus:ring-[#0052CC] focus:border-transparent transition-all outline-none"
@@ -1450,6 +1454,7 @@ export default function App() {
                     <input
                       type="file"
                       accept=".pdf"
+                      disabled={isCompleted}
                       onChange={async (e) => {
                         const file = e.target.files?.[0];
                         if (file) {
@@ -1572,7 +1577,7 @@ export default function App() {
                           Show PDF
                         </button>
                       )}
-                      {selectedSheds.length > 0 && (
+                      {selectedSheds.length > 0 && !isCompleted && (
                         <button
                           onClick={clearAllSheds}
                           className="text-xs font-bold text-red-600 hover:text-red-700 flex items-center gap-1.5 px-3 py-1.5 rounded-lg hover:bg-red-50 transition-all"
@@ -1588,6 +1593,7 @@ export default function App() {
                   <div className="relative">
                     <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-[#9CA3AF] w-5 h-5" />
                     <input
+                      disabled={isCompleted}
                       type="text"
                       placeholder="Search shed name or railway (e.g. PUNE, CR)..."
                       value={searchTerm}
@@ -1595,7 +1601,9 @@ export default function App() {
                         setSearchTerm(e.target.value);
                         setIsDropdownOpen(true);
                       }}
-                      onFocus={() => setIsDropdownOpen(true)}
+                      onFocus={() => {
+                        if (!isCompleted) setIsDropdownOpen(true);
+                      }}
                       className="w-full bg-[#F9FAFB] border border-[#E5E7EB] rounded-xl pl-12 pr-4 py-4 text-sm font-medium focus:ring-2 focus:ring-[#0052CC] focus:border-transparent transition-all outline-none"
                     />
                   </div>
@@ -1680,12 +1688,14 @@ export default function App() {
                                     {hasPrice ? `₹${Math.round(calc.total).toLocaleString('en-IN')}` : '—'}
                                   </p>
                                 </div>
-                                <button
-                                  onClick={() => removeShed(shed.instanceId)}
-                                  className="p-2 text-[#9CA3AF] hover:text-red-600 hover:bg-red-50 rounded-xl transition-all"
-                                >
-                                  <Trash2 className="w-5 h-5" />
-                                </button>
+                                {!isCompleted && (
+                                  <button
+                                    onClick={() => removeShed(shed.instanceId)}
+                                    className="p-2 text-[#9CA3AF] hover:text-red-600 hover:bg-red-50 rounded-xl transition-all"
+                                  >
+                                    <Trash2 className="w-5 h-5" />
+                                  </button>
+                                )}
                               </div>
                             </div>
 
@@ -1699,6 +1709,7 @@ export default function App() {
                                 <label className="text-[10px] font-bold text-[#6B7280] uppercase ml-1 block min-h-[12px]">Power Car</label>
                                 <div className="flex items-center justify-between bg-[#F9FAFB] border border-[#E5E7EB] rounded-xl px-3 h-[42px]">
                                   <input
+                                    disabled={isCompleted}
                                     type="checkbox"
                                     checked={shed.is_power_car}
                                     onChange={(e) => updateSelectedShed(shed.instanceId, { is_power_car: e.target.checked })}
@@ -1714,6 +1725,7 @@ export default function App() {
                                 </label>
                                 {masterVoucherPdf ? (
                                   <input
+                                    disabled={isCompleted}
                                     type="text"
                                     placeholder="e.g. 1-3, 5"
                                     value={shed.voucher_pages || ''}
@@ -1723,6 +1735,7 @@ export default function App() {
                                 ) : (
                                   <div className="relative h-[42px]">
                                     <input
+                                      disabled={isCompleted}
                                       type="file"
                                       accept=".pdf"
                                       onChange={async (e) => {
@@ -1756,6 +1769,7 @@ export default function App() {
                               <div className="space-y-1">
                                 <label className="text-[10px] font-bold text-[#6B7280] uppercase ml-1 block min-h-[12px]">Coach Litres</label>
                                 <input
+                                  disabled={isCompleted}
                                   type="number"
                                   value={shed.coach_litres}
                                   onChange={(e) => updateSelectedShed(shed.instanceId, { coach_litres: parseFloat(e.target.value) || 0 })}
@@ -1768,11 +1782,11 @@ export default function App() {
                                 <input
                                   type="number"
                                   value={shed.goods_litres}
-                                  disabled={shed.is_power_car}
+                                  disabled={isCompleted || shed.is_power_car}
                                   onChange={(e) => updateSelectedShed(shed.instanceId, { goods_litres: parseFloat(e.target.value) || 0 })}
                                   className={cn(
                                     "w-full bg-[#F9FAFB] border border-[#E5E7EB] rounded-xl px-3 py-2 text-sm font-bold outline-none focus:ring-2 focus:ring-[#0052CC] focus:border-transparent h-[42px]",
-                                    shed.is_power_car && "opacity-50 cursor-not-allowed"
+                                    (isCompleted || shed.is_power_car) && "opacity-50 cursor-not-allowed"
                                   )}
                                 />
                               </div>
@@ -1780,6 +1794,7 @@ export default function App() {
                               <div className="space-y-1">
                                 <label className="text-[10px] font-bold text-[#6B7280] uppercase ml-1 block min-h-[12px]">Supplying Shed</label>
                                 <select
+                                  disabled={isCompleted}
                                   value={shed.supplying_shed}
                                   onChange={(e) => updateSelectedShed(shed.instanceId, { supplying_shed: e.target.value })}
                                   className="w-full bg-[#F9FAFB] border border-[#E5E7EB] rounded-xl px-3 py-2 text-sm font-bold outline-none focus:ring-2 focus:ring-[#0052CC] h-[42px]"
@@ -1792,6 +1807,7 @@ export default function App() {
                               <div className="space-y-1">
                                 <label className="text-[10px] font-bold text-[#6B7280] uppercase ml-1 block min-h-[12px]">Pricing Period</label>
                                 <select
+                                  disabled={isCompleted}
                                   value={shed.pricing_period}
                                   onChange={(e) => updateSelectedShed(shed.instanceId, { pricing_period: e.target.value as any })}
                                   className="w-full bg-[#F9FAFB] border border-[#E5E7EB] rounded-xl px-3 py-2 text-sm font-bold outline-none focus:ring-2 focus:ring-[#0052CC] h-[42px]"
@@ -1812,6 +1828,7 @@ export default function App() {
                               <div className="space-y-1">
                                 <label className="text-[10px] font-bold text-[#6B7280] uppercase ml-1 block min-h-[12px]">For Month</label>
                                 <select
+                                  disabled={isCompleted}
                                   value={shed.for_month}
                                   onChange={(e) => updateSelectedShed(shed.instanceId, { for_month: e.target.value })}
                                   className="w-full bg-[#F9FAFB] border border-[#E5E7EB] rounded-xl px-3 py-2 text-sm font-bold outline-none focus:ring-2 focus:ring-[#0052CC] h-[42px]"
@@ -1823,6 +1840,7 @@ export default function App() {
                               <div className="space-y-1">
                                 <label className="text-[10px] font-bold text-[#6B7280] uppercase ml-1 block min-h-[12px]">For Year</label>
                                 <select
+                                  disabled={isCompleted}
                                   value={shed.for_year}
                                   onChange={(e) => updateSelectedShed(shed.instanceId, { for_year: e.target.value })}
                                   className="w-full bg-[#F9FAFB] border border-[#E5E7EB] rounded-xl px-3 py-2 text-sm font-bold outline-none focus:ring-2 focus:ring-[#0052CC] h-[42px]"
@@ -1834,6 +1852,7 @@ export default function App() {
                               <div className="space-y-1">
                                 <label className="text-[10px] font-bold text-[#6B7280] uppercase ml-1 block min-h-[12px]">During Month</label>
                                 <select
+                                  disabled={isCompleted}
                                   value={shed.during_month}
                                   onChange={(e) => updateSelectedShed(shed.instanceId, { during_month: e.target.value })}
                                   className="w-full bg-[#F9FAFB] border border-[#E5E7EB] rounded-xl px-3 py-2 text-sm font-bold outline-none focus:ring-2 focus:ring-[#0052CC] h-[42px]"
@@ -1845,6 +1864,7 @@ export default function App() {
                               <div className="space-y-1">
                                 <label className="text-[10px] font-bold text-[#6B7280] uppercase ml-1 block min-h-[12px]">During Year</label>
                                 <select
+                                  disabled={isCompleted}
                                   value={shed.during_year}
                                   onChange={(e) => updateSelectedShed(shed.instanceId, { during_year: e.target.value })}
                                   className="w-full bg-[#F9FAFB] border border-[#E5E7EB] rounded-xl px-3 py-2 text-sm font-bold outline-none focus:ring-2 focus:ring-[#0052CC] h-[42px]"
@@ -1880,6 +1900,7 @@ export default function App() {
                     <div className="space-y-1.5">
                       <label className="text-[10px] font-bold text-[#6B7280] uppercase ml-1">Log Name</label>
                       <input
+                        disabled={isCompleted}
                         placeholder="e.g. Feb 2026 Batch A"
                         value={sessionName}
                         onChange={(e) => setSessionName(e.target.value)}
@@ -1889,6 +1910,7 @@ export default function App() {
                     <div className="space-y-1.5">
                       <label className="text-[10px] font-bold text-[#6B7280] uppercase ml-1">Notes</label>
                       <textarea
+                        disabled={isCompleted}
                         placeholder="Optional notes..."
                         value={sessionDesc}
                         onChange={(e) => setSessionDesc(e.target.value)}
@@ -1902,6 +1924,7 @@ export default function App() {
                     <div className="space-y-1.5">
                       <label className="text-[10px] font-bold text-[#6B7280] uppercase ml-1">Processing Status</label>
                       <select
+                        disabled={isCompleted}
                         value={sessionStatus}
                         onChange={(e) => setSessionStatus(e.target.value as any)}
                         className={cn(
@@ -1919,11 +1942,11 @@ export default function App() {
 
                     <button
                       onClick={() => handleSaveAction()}
-                      disabled={isSavingSession}
-                      className="w-full bg-white border border-[#0052CC] text-[#0052CC] p-4 rounded-xl font-bold text-sm hover:bg-[#0052CC]/5 transition-all flex items-center justify-center gap-2 active:scale-95"
+                      disabled={isSavingSession || isCompleted}
+                      className="w-full bg-white border border-[#0052CC] text-[#0052CC] disabled:opacity-50 disabled:cursor-not-allowed p-4 rounded-xl font-bold text-sm hover:bg-[#0052CC]/5 transition-all flex items-center justify-center gap-2 active:scale-95"
                     >
                       {isSavingSession ? <div className="w-4 h-4 border-2 border-[#0052CC]/20 border-t-[#0052CC] rounded-full animate-spin" /> : <Save className="w-4 h-4" />}
-                      {currentSessionId ? 'Update Record' : 'Save Permanent Log'}
+                      {isCompleted ? 'Log finalized' : (currentSessionId ? 'Update Record' : 'Save Permanent Log')}
                     </button>
                   </div>
 
@@ -1935,7 +1958,7 @@ export default function App() {
                       className="flex-1 bg-[#0052CC] text-white disabled:bg-[#E5E7EB] p-4 rounded-2xl font-bold text-sm shadow-lg shadow-[#0052CC]/10 hover:shadow-[#0052CC]/20 transition-all flex items-center justify-center gap-3 active:scale-[0.98]"
                     >
                       {isGenerating ? <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" /> : <Download className="w-5 h-5" />}
-                      Download Package
+                      Download certificates (zip)
                     </button>
                     <button
                       disabled={selectedSheds.length === 0 || selectedSheds.some(s => !calculateAmounts(s)) || isGenerating}
@@ -1943,7 +1966,7 @@ export default function App() {
                       className="bg-[#0052CC]/5 border border-[#0052CC]/20 text-[#0052CC] disabled:opacity-50 p-3 rounded-xl font-bold text-xs hover:bg-[#0052CC]/10 transition-all flex items-center justify-center gap-2"
                     >
                       <FileText className="w-4 h-4" />
-                      Certificates Only
+                      Download Full Package (ZIP)
                     </button>
                   </div>
                 </div>
