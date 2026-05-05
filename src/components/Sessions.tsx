@@ -3,6 +3,7 @@ import {
   History, 
   Trash2, 
   Play, 
+  CheckCircle2,
   Calendar, 
   Building2, 
   MessageSquare,
@@ -14,19 +15,21 @@ import { motion, AnimatePresence } from 'motion/react';
 import { Session } from '../types';
 import { cn } from '../utils';
 
-interface SessionsProps {
+interface WorkLogsProps {
   sessions: Session[];
+  currentSessionId: string | null;
   onLoad: (session: Session) => void;
   onDelete: (id: string) => void;
+  onComplete: (id: string) => void;
 }
 
-export const Sessions: React.FC<SessionsProps> = ({ sessions, onLoad, onDelete }) => {
+export const Sessions: React.FC<WorkLogsProps> = ({ sessions, currentSessionId, onLoad, onDelete, onComplete }) => {
   if (sessions.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center py-20 text-[#6B7280]">
         <History className="w-16 h-16 mb-4 opacity-20" />
-        <p className="text-lg font-medium">No saved sessions yet.</p>
-        <p className="text-sm">Save your progress after adding sheds to see them here.</p>
+        <p className="text-lg font-medium">No work logs found.</p>
+        <p className="text-sm">Save your batch processing progress to see logs here.</p>
       </div>
     );
   }
@@ -52,65 +55,111 @@ export const Sessions: React.FC<SessionsProps> = ({ sessions, onLoad, onDelete }
             initial={{ opacity: 0, scale: 0.95 }}
             animate={{ opacity: 1, scale: 1 }}
             exit={{ opacity: 0, scale: 0.95 }}
-            className="bg-white border border-[#E5E7EB] rounded-2xl p-6 shadow-sm hover:shadow-md transition-all group relative overflow-hidden"
+            className={cn(
+              "bg-white border rounded-3xl shadow-sm hover:shadow-xl transition-all duration-300 relative group",
+              session.is_completed ? "border-emerald-200 bg-emerald-50/10" : "border-[#E5E7EB]",
+              currentSessionId === session.id && "border-[#0052CC] ring-2 ring-[#0052CC]/10"
+            )}
           >
-            <div className="absolute top-0 right-0 p-4 opacity-0 group-hover:opacity-100 transition-opacity">
+            {currentSessionId === session.id && (
+              <div className="absolute -top-3 -right-3 bg-[#0052CC] text-white text-[10px] font-black px-3 py-1 rounded-full shadow-lg z-50 animate-bounce">
+                ACTIVE
+              </div>
+            )}
+            {/* Action Buttons - Ensure they are above everything */}
+            <div className="absolute top-6 right-6 flex items-center gap-2 z-[100]">
+              {!session.is_completed && (
+                <button 
+                  onClick={(e) => { 
+                    e.preventDefault();
+                    e.stopPropagation(); 
+                    console.log('Finalizing session:', session.id);
+                    onComplete(session.id); 
+                  }}
+                  className="p-3 text-emerald-600 bg-white hover:bg-emerald-50 rounded-2xl transition-all shadow-xl border border-emerald-100 cursor-pointer active:scale-75 hover:scale-110 pointer-events-auto"
+                  title="Mark as Completed"
+                >
+                  <CheckCircle2 className="w-5 h-5" />
+                </button>
+              )}
               <button 
-                onClick={() => {
-                  if (window.confirm('Delete this session?')) {
-                    onDelete(session.id);
-                  }
+                onClick={(e) => { 
+                  e.preventDefault();
+                  e.stopPropagation(); 
+                  console.log('Deleting session:', session.id);
+                  onDelete(session.id); 
                 }}
-                className="p-2 text-red-500 hover:bg-red-50 rounded-lg transition-colors"
-                title="Delete Session"
+                className="p-3 text-red-500 bg-white hover:bg-red-50 rounded-2xl transition-all shadow-xl border border-red-100 cursor-pointer active:scale-75 hover:scale-110 pointer-events-auto"
+                title="Delete Work Log"
               >
-                <Trash2 className="w-4 h-4" />
+                <Trash2 className="w-5 h-5" />
               </button>
             </div>
 
-            <div className="flex flex-col h-full">
-              <div className="flex items-center gap-3 mb-4">
-                <div className="bg-[#0052CC]/10 p-2.5 rounded-xl text-[#0052CC]">
+            {/* Clickable Content area */}
+            <div 
+              onClick={() => !session.is_completed && onLoad(session)}
+              className={cn(
+                "p-6 flex flex-col h-full cursor-pointer",
+                session.is_completed && "cursor-default"
+              )}
+            >
+              <div className="flex items-center gap-4 mb-5">
+                <div className={cn(
+                  "p-3 rounded-2xl",
+                  session.is_completed ? "bg-emerald-500/10 text-emerald-600" : "bg-[#0052CC]/10 text-[#0052CC]"
+                )}>
                   <Clock className="w-5 h-5" />
                 </div>
-                <div>
-                  <h3 className="font-bold text-lg text-[#1A1A1A] line-clamp-1">{session.name}</h3>
-                  <p className="text-[10px] font-bold text-[#6B7280] uppercase tracking-widest flex items-center gap-1.5 mt-0.5">
+                <div className="pr-16"> {/* Space for absolute buttons */}
+                  <h3 className="font-bold text-lg text-[#1A1A1A] leading-tight line-clamp-1">{session.name}</h3>
+                  <p className="text-[10px] font-bold text-[#6B7280] uppercase tracking-[0.1em] flex items-center gap-1.5 mt-1">
+                    <Calendar className="w-3 h-3" />
                     Updated {formatDate(session.updated_at)}
                   </p>
                 </div>
               </div>
 
               {session.description && (
-                <div className="bg-[#F9FAFB] rounded-xl p-3 mb-4 flex gap-2">
-                  <MessageSquare className="w-3.5 h-3.5 text-[#9CA3AF] shrink-0 mt-0.5" />
-                  <p className="text-xs text-[#6B7280] line-clamp-2 italic">"{session.description}"</p>
+                <div className="bg-gray-50/50 border border-gray-100 rounded-2xl p-4 mb-5 flex gap-3">
+                  <MessageSquare className="w-4 h-4 text-[#9CA3AF] shrink-0 mt-0.5" />
+                  <p className="text-xs text-[#6B7280] line-clamp-2 leading-relaxed italic">"{session.description}"</p>
                 </div>
               )}
 
-              <div className="grid grid-cols-2 gap-3 mb-6">
-                <div className="bg-[#F3F4F6] rounded-xl p-3">
-                  <p className="text-[10px] font-bold text-[#9CA3AF] uppercase mb-1">Period</p>
+              <div className="grid grid-cols-2 gap-4 mb-6">
+                <div className="bg-white border border-gray-100 rounded-2xl p-3.5 shadow-sm">
+                  <p className="text-[10px] font-black text-[#9CA3AF] uppercase tracking-wider mb-1.5">Period</p>
                   <p className="text-xs font-bold text-[#1A1A1A]">{session.state.selectedMonth} {session.state.selectedYear}</p>
                 </div>
-                <div className="bg-[#F3F4F6] rounded-xl p-3">
-                  <p className="text-[10px] font-bold text-[#9CA3AF] uppercase mb-1">Sheds</p>
-                  <p className="text-xs font-bold text-[#1A1A1A]">{session.state.selectedSheds.length} Added</p>
+                <div className="bg-white border border-gray-100 rounded-2xl p-3.5 shadow-sm">
+                  <p className="text-[10px] font-black text-[#9CA3AF] uppercase tracking-wider mb-1.5">Inventory</p>
+                  <p className="text-xs font-bold text-[#1A1A1A]">{session.state.selectedSheds.length} Sheds Added</p>
                 </div>
               </div>
 
-              <div className="mt-auto flex items-center justify-between gap-4">
-                <div className="flex items-center gap-1.5">
-                  <div className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
-                  <span className="text-[10px] font-bold text-emerald-600 uppercase tracking-widest">Progress Saved</span>
+              <div className="mt-auto flex items-center justify-between pt-4 border-t border-gray-50">
+                {session.is_completed ? (
+                  <div className="flex items-center gap-2">
+                    <div className="h-2 w-2 rounded-full bg-emerald-500" />
+                    <span className="text-[10px] font-black text-emerald-600 uppercase tracking-widest">Completed</span>
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-2">
+                    <div className="h-2 w-2 rounded-full bg-amber-500 animate-pulse" />
+                    <span className="text-[10px] font-black text-amber-600 uppercase tracking-widest">In Progress</span>
+                  </div>
+                )}
+                
+                <div className={cn(
+                  "px-4 py-2 rounded-xl font-bold text-xs transition-all flex items-center gap-2",
+                  session.is_completed 
+                    ? "text-gray-400" 
+                    : "text-[#0052CC] group-hover:bg-[#0052CC] group-hover:text-white"
+                )}>
+                  {session.is_completed ? "Archived" : "Resume"}
+                  <ChevronRight className="w-3.5 h-3.5" />
                 </div>
-                <button
-                  onClick={() => onLoad(session)}
-                  className="bg-[#0052CC] text-white px-5 py-2.5 rounded-xl font-bold text-sm shadow-lg shadow-[#0052CC]/10 hover:shadow-[#0052CC]/20 hover:scale-[1.02] transition-all flex items-center gap-2 active:scale-95"
-                >
-                  <Play className="w-4 h-4 fill-current" />
-                  Resume
-                </button>
               </div>
             </div>
           </motion.div>

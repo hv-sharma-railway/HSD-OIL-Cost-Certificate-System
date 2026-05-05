@@ -61,6 +61,7 @@ export interface Session {
   id: string;
   name: string;
   description: string;
+  is_completed: boolean;
   created_at: string;
   updated_at: string;
   state: {
@@ -75,6 +76,7 @@ export interface Session {
 
 export interface ConsumptionRecord {
   id: string;
+  session_id: string | null;
   shed_name: string;
   railway: string;
   supplying_shed: string;

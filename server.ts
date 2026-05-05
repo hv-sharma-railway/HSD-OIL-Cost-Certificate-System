@@ -30,6 +30,7 @@ db.exec(`
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
     description TEXT,
+    is_completed INTEGER DEFAULT 0,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     state TEXT NOT NULL
@@ -37,6 +38,7 @@ db.exec(`
 
   CREATE TABLE IF NOT EXISTS consumption_records (
     id TEXT PRIMARY KEY,
+    session_id TEXT,
     shed_name TEXT NOT NULL,
     railway TEXT NOT NULL,
     supplying_shed TEXT NOT NULL,
@@ -50,54 +52,70 @@ db.exec(`
     amount REAL NOT NULL,
     is_power_car INTEGER NOT NULL,
     pricing_period TEXT NOT NULL,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
   );
 `);
+
+// Alter existing tables if needed
+try { db.prepare("ALTER TABLE sessions ADD COLUMN is_completed INTEGER DEFAULT 0").run(); } catch (e) {}
+try { db.prepare("ALTER TABLE consumption_records ADD COLUMN session_id TEXT").run(); } catch (e) {}
 
 const app = express();
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
-// API Routes
+// Work Logs & Analytics State
 app.get("/api/sessions", (req, res) => {
   const sessions = db.prepare("SELECT * FROM sessions ORDER BY updated_at DESC").all();
-  res.json(sessions.map((s: any) => ({ ...s, state: JSON.parse(s.state) })));
+  res.json(sessions.map((s: any) => ({ ...s, is_completed: !!s.is_completed, state: JSON.parse(s.state) })));
 });
 
 app.post("/api/sessions", (req, res) => {
-  const { id, name, description, state } = req.body;
+  const { id, name, description, state, is_completed } = req.body;
   const stateStr = JSON.stringify(state);
   db.prepare(`
-    INSERT OR REPLACE INTO sessions (id, name, description, state, updated_at) 
-    VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
-  `).run(id, name, description, stateStr);
+    INSERT OR REPLACE INTO sessions (id, name, description, is_completed, state, updated_at) 
+    VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+  `).run(id, name, description, is_completed ? 1 : 0, stateStr);
+  res.json({ success: true });
+});
+
+app.patch("/api/sessions/:id/complete", (req, res) => {
+  db.prepare("UPDATE sessions SET is_completed = 1, updated_at = CURRENT_TIMESTAMP WHERE id = ?").run(req.params.id);
   res.json({ success: true });
 });
 
 app.delete("/api/sessions/:id", (req, res) => {
+  db.prepare("DELETE FROM consumption_records WHERE session_id = ?").run(req.params.id);
   db.prepare("DELETE FROM sessions WHERE id = ?").run(req.params.id);
   res.json({ success: true });
 });
 
 app.get("/api/analytics", (req, res) => {
-  const records = db.prepare("SELECT * FROM consumption_records ORDER BY year DESC, month DESC").all();
-  res.json(records);
+  const records = db.prepare(`
+    SELECT cr.* FROM consumption_records cr
+    JOIN sessions s ON cr.session_id = s.id
+    WHERE s.is_completed = 1
+    ORDER BY cr.year DESC, cr.month DESC
+  `).all();
+  res.json(records.map((r: any) => ({ ...r, is_power_car: !!r.is_power_car })));
 });
 
 app.post("/api/analytics/batch", (req, res) => {
   const records = req.body; // Array of records
   const insert = db.prepare(`
     INSERT INTO consumption_records (
-      id, shed_name, railway, supplying_shed, month, year, 
+      id, session_id, shed_name, railway, supplying_shed, month, year, 
       during_month, during_year, goods_litres, coach_litres, 
       total_litres, amount, is_power_car, pricing_period
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
 
   const transaction = db.transaction((recs) => {
     for (const r of recs) {
       insert.run(
-        r.id, r.shed_name, r.railway, r.supplying_shed, r.month, r.year,
+        r.id, r.session_id || null, r.shed_name, r.railway, r.supplying_shed, r.month, r.year,
         r.during_month, r.during_year, r.goods_litres, r.coach_litres,
         r.total_litres, r.amount, r.is_power_car ? 1 : 0, r.pricing_period
       );

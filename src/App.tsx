@@ -32,9 +32,9 @@ import * as pdfjsLib from 'pdfjs-dist';
 
 // New Components
 import { Analytics } from './components/Analytics';
-import { Sessions } from './components/Sessions';
+import { Sessions as WorkLogs } from './components/Sessions';
 
-// Set worker source for pdfjs-dist
+// Set worker source for pdfjs-dist - Using unpkg for better reliability
 const PDF_WORKER_URL = `https://unpkg.com/pdfjs-dist@${pdfjsLib.version}/build/pdf.worker.min.mjs`;
 pdfjsLib.GlobalWorkerOptions.workerSrc = PDF_WORKER_URL;
 
@@ -71,7 +71,9 @@ const PdfCanvasRenderer = ({ pdfData }: { pdfData: string }) => {
         }
 
         const loadingTask = pdfjsLib.getDocument({ 
-          data: bytes
+          data: bytes,
+          cMapUrl: `https://unpkg.com/pdfjs-dist@${pdfjsLib.version}/cmaps/`,
+          cMapPacked: true,
         });
         
         const pdf = await loadingTask.promise;
@@ -174,7 +176,8 @@ import {
 } from './types';
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<'generate' | 'prices' | 'sheds' | 'sessions' | 'analytics'>('generate');
+  const [activeTab, setActiveTab] = useState<'generate' | 'prices' | 'sheds' | 'worklogs' | 'analytics'>('generate');
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [selectedMonth, setSelectedMonth] = useState(() => {
     const d = new Date();
     d.setMonth(d.getMonth() - 1);
@@ -200,11 +203,20 @@ export default function App() {
 
   // Sessions & Analytics State
   const [sessions, setSessions] = useState<Session[]>([]);
+  const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
   const [consumptionRecords, setConsumptionRecords] = useState<ConsumptionRecord[]>([]);
   const [isSavingSession, setIsSavingSession] = useState(false);
   const [sessionName, setSessionName] = useState('');
   const [sessionDesc, setSessionDesc] = useState('');
   const [showSaveSessionModal, setShowSaveSessionModal] = useState(false);
+  const [autoCompleteOnGenerate, setAutoCompleteOnGenerate] = useState(false);
+
+  useEffect(() => {
+    if (successMessage) {
+      const timer = setTimeout(() => setSuccessMessage(null), 3000);
+      return () => clearTimeout(timer);
+    }
+  }, [successMessage]);
 
   const fileToBase64 = (file: File): Promise<string> => {
     return new Promise((resolve, reject) => {
@@ -269,6 +281,37 @@ export default function App() {
     };
     fetchData();
   }, []);
+
+  const createNewLog = () => {
+    if (selectedSheds.length > 0) {
+      if (!window.confirm('Clear current progress and start a new work log?')) {
+        return;
+      }
+    }
+    
+    // Explicitly reset all relevant state
+    setCurrentSessionId(null);
+    setSelectedSheds([]);
+    setMasterVoucherPdf(null);
+    setMasterVoucherPdfName(null);
+    if (masterVoucherPdfUrl) {
+      URL.revokeObjectURL(masterVoucherPdfUrl);
+      setMasterVoucherPdfUrl(null);
+    }
+    setSessionName('');
+    setSessionDesc('');
+    setShowPdfPreview(false);
+    setAutoCompleteOnGenerate(false);
+    
+    // Reset to defaults
+    const d = new Date();
+    d.setMonth(d.getMonth() - 1);
+    setSelectedMonth(MONTHS[d.getMonth()]);
+    setSelectedYear(d.getFullYear().toString());
+    
+    setSuccessMessage('Started a fresh work log');
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
 
   const [newShed, setNewShed] = useState<Partial<ShedMasterEntry>>({
     railway: 'WR'
@@ -478,6 +521,10 @@ export default function App() {
 
   const generateCertificatesOnlyZip = async () => {
     setIsGenerating(true);
+    
+    // Auto-save before generating
+    const sessionId = await saveCurrentSession(true);
+    
     const zip = new JSZip();
 
     try {
@@ -699,8 +746,10 @@ export default function App() {
       link.download = `HSD_Certificates_Only_${selectedMonth}_${selectedYear}.zip`;
       link.click();
       
-      // Record for analytics
-      recordAnalytics();
+      // Auto-complete logic
+      if (autoCompleteOnGenerate && sessionId) {
+        await completeSession(sessionId, true);
+      }
     } catch (error) {
       console.error('Error generating ZIP:', error);
       alert('Error generating certificates. Please check console for details.');
@@ -715,14 +764,22 @@ export default function App() {
     }
   };
 
-  const saveCurrentSession = async () => {
-    if (!sessionName) return alert('Please enter a session name');
+  const saveCurrentSession = async (silent = false) => {
+    if (!sessionName && !silent) return alert('Please enter a work log name');
+    
+    // Auto-generate name if silent and missing
+    const finalName = sessionName || `Work Log - ${new Date().toLocaleDateString('en-GB')} ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+    
     setIsSavingSession(true);
+    const sessionId = currentSessionId || Math.random().toString(36).substr(2, 9);
+    const existingLog = sessions.find(s => s.id === sessionId);
+
     const newSession: Session = {
-      id: Math.random().toString(36).substr(2, 9),
-      name: sessionName,
+      id: sessionId,
+      name: finalName,
       description: sessionDesc,
-      created_at: new Date().toISOString(),
+      is_completed: existingLog?.is_completed || false,
+      created_at: existingLog?.created_at || new Date().toISOString(),
       updated_at: new Date().toISOString(),
       state: {
         selectedMonth,
@@ -740,28 +797,78 @@ export default function App() {
         body: JSON.stringify(newSession)
       });
       setSessions(prev => [newSession, ...prev.filter(s => s.id !== newSession.id)]);
+      setCurrentSessionId(sessionId);
+      if (!sessionName) setSessionName(finalName);
       setShowSaveSessionModal(false);
-      setSessionName('');
-      setSessionDesc('');
+      if (!silent) setSuccessMessage(currentSessionId ? 'Work log updated successfully' : 'Work log saved successfully');
+      return sessionId;
     } catch (e) {
       console.error('Save session error:', e);
-      alert('Error saving session');
+      if (!silent) alert('Error saving work log');
+      return null;
     } finally {
       setIsSavingSession(false);
     }
   };
 
+  const completeSession = async (id: string, skipConfirm = false) => {
+    const logToComplete = sessions.find(s => s.id === id);
+    if (!logToComplete) return;
+
+    if (!skipConfirm && !window.confirm('Mark this work log as COMPLETED? \n\nThis will freeze the data and sync it to the dashboard analytics.')) {
+      return;
+    }
+
+    try {
+      await fetch(`/api/sessions/${id}/complete`, { method: 'PATCH' });
+      
+      // Record analytics data
+      await recordAnalyticsData(logToComplete.state.selectedSheds, id);
+      
+      setSessions(prev => prev.map(s => s.id === id ? { ...s, is_completed: true } : s));
+      setSuccessMessage('Work log marked as completed');
+      
+      // Refresh analytics
+      const analyticsRes = await fetch('/api/analytics');
+      const updatedAnalytics = await analyticsRes.json();
+      setConsumptionRecords(updatedAnalytics);
+      
+      if (currentSessionId === id) {
+        setCurrentSessionId(null);
+        setSelectedSheds([]);
+      }
+    } catch (e) {
+      console.error('Complete session error:', e);
+      alert('Error finalizing work log');
+    }
+  };
+
   const deleteSession = async (id: string) => {
+    if (!window.confirm('DELETE this work log? \n\nThis action cannot be undone and will remove associated records from analytics.')) {
+      return;
+    }
+
     try {
       await fetch(`/api/sessions/${id}`, { method: 'DELETE' });
       setSessions(prev => prev.filter(s => s.id !== id));
+      if (currentSessionId === id) setCurrentSessionId(null);
+      
+      // Refresh analytics as records are deleted cascade
+      const analyticsRes = await fetch('/api/analytics');
+      const updatedAnalytics = await analyticsRes.json();
+      setConsumptionRecords(updatedAnalytics);
+      setSuccessMessage('Work log deleted successfully');
     } catch (e) {
       console.error('Delete session error:', e);
+      alert('Error deleting work log');
     }
   };
 
   const loadSession = (session: Session) => {
     const { state } = session;
+    setCurrentSessionId(session.id);
+    setSessionName(session.name);
+    setSessionDesc(session.description || '');
     setSelectedMonth(state.selectedMonth);
     setSelectedYear(state.selectedYear);
     setSelectedSupplyingShed(state.selectedSupplyingShed);
@@ -790,18 +897,20 @@ export default function App() {
     }
     
     setActiveTab('generate');
+    setSuccessMessage('Work log loaded successfully');
   };
 
-  const recordAnalytics = async () => {
-    const records: Partial<ConsumptionRecord>[] = selectedSheds.map(shed => {
+  const recordAnalyticsData = async (shedsToRecord: SelectedShed[], sessionId: string) => {
+    const records = shedsToRecord.map(shed => {
       const calc = calculateAmounts(shed);
       return {
         id: Math.random().toString(36).substr(2, 9),
+        session_id: sessionId,
         shed_name: shed.shed_name,
         railway: shed.railway,
         supplying_shed: shed.supplying_shed,
-        month: selectedMonth,
-        year: selectedYear,
+        month: shed.for_month,
+        year: shed.for_year,
         during_month: shed.during_month,
         during_year: shed.during_year,
         goods_litres: shed.goods_litres,
@@ -819,9 +928,6 @@ export default function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(records)
       });
-      const analyticsRes = await fetch('/api/analytics');
-      const updatedAnalytics = await analyticsRes.json();
-      setConsumptionRecords(updatedAnalytics);
     } catch (e) {
       console.error('Record analytics error:', e);
     }
@@ -855,6 +961,10 @@ export default function App() {
 
   const generateCertificatesZip = async () => {
     setIsGenerating(true);
+    
+    // Auto-save before generating
+    const sessionId = await saveCurrentSession(true);
+    
     const zip = new JSZip();
 
     try {
@@ -1156,8 +1266,10 @@ export default function App() {
       link.download = `HSD_Certificates_${selectedMonth}_${selectedYear}.zip`;
       link.click();
 
-      // Record for analytics
-      recordAnalytics();
+      // Auto-complete logic
+      if (autoCompleteOnGenerate && sessionId) {
+        await completeSession(sessionId, true);
+      }
     } catch (error) {
       console.error('Error generating ZIP:', error);
       alert('Error generating certificates. Please check console for details.');
@@ -1212,14 +1324,14 @@ export default function App() {
               Shed Master
             </button>
             <button
-              onClick={() => setActiveTab('sessions')}
+              onClick={() => setActiveTab('worklogs')}
               className={cn(
                 "px-4 py-2 rounded-lg text-sm font-semibold transition-all duration-200 flex items-center gap-2",
-                activeTab === 'sessions' ? "bg-white text-[#0052CC] shadow-sm" : "text-[#6B7280] hover:text-[#1A1A1A]"
+                activeTab === 'worklogs' ? "bg-white text-[#0052CC] shadow-sm" : "text-[#6B7280] hover:text-[#1A1A1A]"
               )}
             >
               <History className="w-4 h-4" />
-              Sessions
+              Work Logs
             </button>
             <button
               onClick={() => setActiveTab('analytics')}
@@ -1245,6 +1357,43 @@ export default function App() {
               exit={{ opacity: 0, y: -10 }}
               className="space-y-8"
             >
+              <div className="flex justify-between items-center bg-[#0052CC]/5 p-4 rounded-2xl border border-[#0052CC]/10">
+                <div className="flex items-center gap-3">
+                  <div className="bg-white p-2 rounded-xl border border-[#0052CC]/10 shadow-sm">
+                    <History className="w-5 h-5 text-[#0052CC]" />
+                  </div>
+                  <div>
+                    <p className={cn(
+                      "text-[10px] font-black uppercase tracking-[0.2em] mb-0.5",
+                      currentSessionId ? "text-[#0052CC]" : "text-[#6B7280]"
+                    )}>
+                      {currentSessionId ? '● Active Processing' : 'Fresh Session'}
+                    </p>
+                    <h2 className="text-base font-black text-[#1A1A1A]">
+                      {currentSessionId 
+                        ? sessions.find(s => s.id === currentSessionId)?.name || 'Loading...'
+                        : 'Draft Work Log'}
+                    </h2>
+                  </div>
+                </div>
+                <div className="flex gap-2">
+                  <button
+                    onClick={createNewLog}
+                    className="px-4 py-2 bg-white border border-[#E5E7EB] rounded-xl text-xs font-bold text-[#6B7280] hover:bg-gray-50 flex items-center gap-2 transition-all active:scale-95"
+                  >
+                    <Plus className="w-4 h-4" />
+                    New Log
+                  </button>
+                  <button
+                    onClick={() => setShowSaveSessionModal(true)}
+                    className="px-4 py-2 bg-[#0052CC] text-white rounded-xl text-xs font-bold shadow-lg shadow-[#0052CC]/10 hover:shadow-[#0052CC]/20 flex items-center gap-2 transition-all active:scale-95"
+                  >
+                    <Save className="w-4 h-4" />
+                    {currentSessionId ? 'Update Log' : 'Save Log'}
+                  </button>
+                </div>
+              </div>
+
               {/* Save Session Modal */}
               <AnimatePresence>
                 {showSaveSessionModal && (
@@ -1260,7 +1409,7 @@ export default function App() {
                           <div className="bg-[#0052CC]/10 p-2 rounded-xl text-[#0052CC]">
                             <Save className="w-6 h-6" />
                           </div>
-                          <h3 className="text-xl font-bold">Save Current Session</h3>
+                          <h3 className="text-xl font-bold">{currentSessionId ? 'Update Work Log' : 'Save Work Log'}</h3>
                         </div>
                         <button onClick={() => setShowSaveSessionModal(false)} className="p-2 hover:bg-gray-100 rounded-full transition-colors">
                           <X className="w-5 h-5 text-gray-400" />
@@ -1269,7 +1418,7 @@ export default function App() {
                       
                       <div className="space-y-4">
                         <div className="space-y-1.5">
-                          <label className="text-xs font-bold text-gray-500 uppercase ml-1">Session Name</label>
+                          <label className="text-xs font-bold text-gray-500 uppercase ml-1">Log Name</label>
                           <input
                             type="text"
                             placeholder="e.g. Feb 2026 Batch A"
@@ -1281,7 +1430,7 @@ export default function App() {
                         <div className="space-y-1.5">
                           <label className="text-xs font-bold text-gray-500 uppercase ml-1">Description (Optional)</label>
                           <textarea
-                            placeholder="Add notes about this session..."
+                            placeholder="Add notes about this work session..."
                             value={sessionDesc}
                             onChange={(e) => setSessionDesc(e.target.value)}
                             className="w-full bg-gray-50 border border-gray-200 rounded-xl px-4 py-3 text-sm font-medium focus:ring-2 focus:ring-[#0052CC] outline-none min-h-[100px] resize-none"
@@ -1306,7 +1455,7 @@ export default function App() {
                           ) : (
                             <Save className="w-4 h-4" />
                           )}
-                          Save Session
+                          {currentSessionId ? 'Update Work Log' : 'Save Work Log'}
                         </button>
                       </div>
                     </motion.div>
@@ -1491,7 +1640,7 @@ export default function App() {
                           className="text-xs font-bold text-emerald-600 hover:text-emerald-700 flex items-center gap-1.5 px-3 py-1.5 rounded-lg hover:bg-emerald-50 transition-all border border-emerald-200"
                         >
                           <Save className="w-3.5 h-3.5" />
-                          Save Session
+                          Save Progress
                         </button>
                       )}
                       {masterVoucherPdf && !showPdfPreview && (
@@ -1804,57 +1953,86 @@ export default function App() {
                   <CheckCircle2 className="text-[#0052CC] w-5 h-5" />
                   <h2 className="text-sm font-bold uppercase tracking-widest text-[#6B7280]">Step 4: Final Review & Generate</h2>
                 </div>
-                <div className="flex justify-end gap-4">
-                  <button
-                    disabled={selectedSheds.length === 0 || selectedSheds.some(s => !calculateAmounts(s)) || isGenerating}
-                    onClick={generateCertificatesOnlyZip}
-                    className="bg-white border-2 border-[#0052CC] text-[#0052CC] disabled:border-[#E5E7EB] disabled:text-[#9CA3AF] disabled:cursor-not-allowed px-6 py-4 rounded-2xl font-bold text-base shadow-sm hover:bg-[#0052CC]/5 transition-all flex items-center gap-3 active:scale-95"
-                  >
-                    {isGenerating ? (
-                      <>
-                        <div className="w-5 h-5 border-2 border-[#0052CC]/30 border-t-[#0052CC] rounded-full animate-spin" />
-                        Generating...
-                      </>
-                    ) : (
-                      <>
-                        <FileText className="w-5 h-5" />
-                        Download Certificates Only
-                      </>
-                    )}
-                  </button>
+                
+                <div className="flex flex-col md:flex-row md:items-center justify-between gap-6">
+                  <div className="flex items-center gap-3 bg-white p-5 rounded-2xl border border-gray-100 flex-1 shadow-sm">
+                    <input
+                      type="checkbox"
+                      id="autoComplete"
+                      checked={autoCompleteOnGenerate}
+                      onChange={async (e) => {
+                        setAutoCompleteOnGenerate(e.target.checked);
+                        if (e.target.checked && !currentSessionId) {
+                          // Silently create a session if one doesn't exist yet
+                          await saveCurrentSession(true);
+                        }
+                      }}
+                      className="w-6 h-6 rounded-lg border-gray-300 text-[#0052CC] focus:ring-[#0052CC] cursor-pointer"
+                    />
+                    <label htmlFor="autoComplete" className="text-sm font-bold text-[#1A1A1A] cursor-pointer select-none leading-tight">
+                      Automatically mark work log as <span className="text-emerald-600">Completed</span> after generation
+                      <p className="text-[10px] font-medium text-gray-500 mt-1 uppercase tracking-tight">Syncs analytics data to dashboard</p>
+                    </label>
+                  </div>
 
-                  <button
-                    disabled={selectedSheds.length === 0 || selectedSheds.some(s => !calculateAmounts(s)) || isGenerating}
-                    onClick={generateCertificatesZip}
-                    className="bg-[#0052CC] disabled:bg-[#E5E7EB] disabled:cursor-not-allowed text-white px-8 py-4 rounded-2xl font-bold text-base shadow-lg shadow-[#0052CC]/20 hover:shadow-xl hover:shadow-[#0052CC]/30 transition-all flex items-center gap-3 active:scale-95"
-                  >
-                    {isGenerating ? (
-                      <>
-                        <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                        Generating ZIP...
-                      </>
-                    ) : (
-                      <>
-                        <Download className="w-5 h-5" />
-                        Generate Full ZIP (with Vouchers)
-                      </>
-                    )}
-                  </button>
+                  <div className="flex flex-col sm:flex-row gap-4">
+                    <button
+                      disabled={selectedSheds.length === 0 || selectedSheds.some(s => !calculateAmounts(s)) || isGenerating}
+                      onClick={generateCertificatesOnlyZip}
+                      className="bg-white border-2 border-[#0052CC] text-[#0052CC] disabled:border-[#E5E7EB] disabled:text-[#9CA3AF] disabled:cursor-not-allowed px-6 py-4 rounded-2xl font-bold text-base shadow-sm hover:bg-[#0052CC]/5 transition-all flex items-center gap-3 active:scale-95"
+                    >
+                      {isGenerating ? (
+                        <>
+                          <div className="w-5 h-5 border-2 border-[#0052CC]/30 border-t-[#0052CC] rounded-full animate-spin" />
+                          Generating...
+                        </>
+                      ) : (
+                        <>
+                          <FileText className="w-5 h-5" />
+                          Download Certificates Only
+                        </>
+                      )}
+                    </button>
+
+                    <button
+                      disabled={selectedSheds.length === 0 || selectedSheds.some(s => !calculateAmounts(s)) || isGenerating}
+                      onClick={generateCertificatesZip}
+                      className="bg-[#0052CC] disabled:bg-[#E5E7EB] disabled:cursor-not-allowed text-white px-8 py-4 rounded-2xl font-bold text-base shadow-lg shadow-[#0052CC]/20 hover:shadow-xl hover:shadow-[#0052CC]/30 transition-all flex items-center gap-3 active:scale-95"
+                    >
+                      {isGenerating ? (
+                        <>
+                          <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                          Generating ZIP...
+                        </>
+                      ) : (
+                        <>
+                          <Download className="w-5 h-5" />
+                          Generate Full ZIP
+                        </>
+                      )}
+                    </button>
+                  </div>
                 </div>
               </section>
             </motion.div>
-          ) : activeTab === 'sessions' ? (
+          ) : activeTab === 'worklogs' ? (
             <motion.div
-              key="sessions"
+              key="worklogs"
               initial={{ opacity: 0, y: 10 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -10 }}
             >
               <div className="mb-8">
-                <h2 className="text-2xl font-black text-[#1A1A1A]">Work Sessions</h2>
+                <h2 className="text-2xl font-black text-[#1A1A1A]">Work Logs & History</h2>
                 <p className="text-sm text-[#6B7280] font-medium">Resume your saved progress or manage previous certificate generations.</p>
               </div>
-              <Sessions sessions={sessions} onLoad={loadSession} onDelete={deleteSession} />
+              <WorkLogs 
+                sessions={sessions} 
+                currentSessionId={currentSessionId}
+                onLoad={loadSession} 
+                onDelete={deleteSession} 
+                onComplete={completeSession}
+              />
             </motion.div>
           ) : activeTab === 'analytics' ? (
             <motion.div
@@ -2304,6 +2482,25 @@ export default function App() {
           </p>
         </div>
       </footer>
+
+      {/* Success Toast */}
+      <AnimatePresence>
+        {successMessage && (
+          <motion.div
+            initial={{ opacity: 0, y: 100, x: '-50%' }}
+            animate={{ opacity: 1, y: 0, x: '-50%' }}
+            exit={{ opacity: 0, y: 100, x: '-50%' }}
+            className="fixed bottom-8 left-1/2 -translate-x-1/2 z-50 pointer-events-none"
+          >
+            <div className="bg-[#1A1A1A] text-white px-6 py-3 rounded-2xl shadow-2xl flex items-center gap-3 border border-white/10 backdrop-blur-md">
+              <div className="bg-emerald-500 p-1 rounded-full">
+                <Check className="w-4 h-4 text-white" />
+              </div>
+              <span className="text-sm font-bold tracking-tight">{successMessage}</span>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
