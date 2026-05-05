@@ -1,11 +1,11 @@
 import React, { useState, useMemo, useEffect } from 'react';
-import { 
-  FileText, 
-  Plus, 
-  Trash2, 
-  Download, 
-  Search, 
-  Settings, 
+import {
+  FileText,
+  Plus,
+  Trash2,
+  Download,
+  Search,
+  Settings,
   ChevronRight,
   Calendar,
   Building2,
@@ -17,7 +17,13 @@ import {
   Upload,
   Eye,
   EyeOff,
-  ExternalLink
+  ExternalLink,
+  Shield,
+  ShieldCheck,
+  ShieldOff,
+  Loader2,
+  KeyRound,
+  RefreshCw
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { jsPDF } from 'jspdf';
@@ -187,6 +193,16 @@ export default function App() {
   const [masterVoucherPdfName, setMasterVoucherPdfName] = useState<string | null>(null);
   const [masterVoucherPdfUrl, setMasterVoucherPdfUrl] = useState<string | null>(null);
   const [showPdfPreview, setShowPdfPreview] = useState(false);
+
+  // DSC Digital Signature state
+  const [dscEnabled, setDscEnabled] = useState(false);
+  const [dscPort, setDscPort] = useState('55101');
+  const [dscProtocol, setDscProtocol] = useState<'https' | 'http'>('https');
+  const [dscServiceType, setDscServiceType] = useState<'auto' | 'embridge' | 'dscsigner'>('auto');
+  const [dscStatus, setDscStatus] = useState<'idle' | 'testing' | 'online' | 'offline'>('idle');
+  const [dscStatusMessage, setDscStatusMessage] = useState('');
+  const [signingProgress, setSigningProgress] = useState<{ current: number; total: number; name: string } | null>(null);
+  const [lastSigningReport, setLastSigningReport] = useState<{ signed: number; failed: number; skipped: number } | null>(null);
 
   const fileToBase64 = (file: File): Promise<string> => {
     return new Promise((resolve, reject) => {
@@ -454,7 +470,10 @@ export default function App() {
 
   const generateCertificatesOnlyZip = async () => {
     setIsGenerating(true);
+    setSigningProgress(null);
+    setLastSigningReport(null);
     const zip = new JSZip();
+    let signedCount = 0, failedCount = 0, skippedCount = 0;
 
     try {
       for (const shed of selectedSheds) {
@@ -664,10 +683,29 @@ export default function App() {
           }
         });
 
-        const finalPdfBytes = doc.output('arraybuffer');
+        const rawBytes = new Uint8Array(doc.output('arraybuffer'));
         const fileName = `${shed.shed_name}_${shed.railway}_RS_${Math.round(calc.total)}_${shed.coach_litres + (shed.is_power_car ? 0 : shed.goods_litres)}_LITRES_${shed.during_month}${shed.during_year}.pdf`;
-        zip.file(fileName, finalPdfBytes);
+
+        if (dscEnabled) {
+          const shedIdx = selectedSheds.indexOf(shed) + 1;
+          setSigningProgress({ current: shedIdx, total: selectedSheds.length, name: shed.shed_name });
+          const signed = await signPdfBytes(rawBytes, 'HSD Oil Cost Certificate');
+          if (signed) {
+            zip.file(fileName, signed);
+            signedCount++;
+          } else {
+            zip.file(fileName, rawBytes);
+            failedCount++;
+            console.warn(`DSC signing failed for ${shed.shed_name}, using unsigned PDF`);
+          }
+        } else {
+          zip.file(fileName, rawBytes);
+          skippedCount++;
+        }
       }
+
+      setSigningProgress(null);
+      if (dscEnabled) setLastSigningReport({ signed: signedCount, failed: failedCount, skipped: skippedCount });
 
       const zipContent = await zip.generateAsync({ type: 'blob' });
       const link = document.createElement('a');
@@ -679,6 +717,7 @@ export default function App() {
       alert('Error generating certificates. Please check console for details.');
     } finally {
       setIsGenerating(false);
+      setSigningProgress(null);
     }
   };
 
@@ -687,6 +726,169 @@ export default function App() {
       setSelectedSheds([]);
     }
   };
+
+  // ─── DSC Signing helpers ──────────────────────────────────────────────────
+
+  const uint8ToBase64 = (bytes: Uint8Array): string => {
+    const chunkSize = 8192;
+    let binary = '';
+    for (let i = 0; i < bytes.length; i += chunkSize) {
+      binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
+    }
+    return btoa(binary);
+  };
+
+  const testDscConnection = async () => {
+    setDscStatus('testing');
+    setDscStatusMessage('Connecting to DSC service…');
+
+    // Primary: browser direct (works because browser runs on Windows host)
+    try {
+      const resp = await fetch(`${dscProtocol}://127.0.0.1:${dscPort}/check/isLive`, {
+        signal: AbortSignal.timeout(5000),
+      });
+      if (resp.ok) {
+        setDscStatus('online');
+        setDscStatusMessage('DSC service online (direct connection)');
+        return;
+      }
+    } catch (_) { /* fall through to proxy */ }
+
+    // Fallback: server proxy (Docker container → host.docker.internal)
+    try {
+      const resp = await fetch(`/api/dsc/health?port=${dscPort}&protocol=${dscProtocol}`, {
+        signal: AbortSignal.timeout(8000),
+      });
+      const data = await resp.json();
+      if (data.status === 'online') {
+        setDscStatus('online');
+        setDscStatusMessage('DSC service online (via server proxy)');
+        return;
+      }
+    } catch (_) { /* fall through */ }
+
+    setDscStatus('offline');
+    setDscStatusMessage(
+      `Cannot reach ${dscProtocol}://127.0.0.1:${dscPort}. ` +
+      'Ensure emBridge or DSC Signer Service is running and your USB token is connected.'
+    );
+  };
+
+  // Tries to sign a PDF using emBridge / DSC Signer Service.
+  // Attempts direct browser fetch first; falls back to server proxy.
+  // Returns signed bytes on success, or null on failure.
+  const signPdfBytes = async (
+    pdfBytes: Uint8Array,
+    reason: string = 'HSD Oil Cost Certificate'
+  ): Promise<Uint8Array | null> => {
+    const pdfBase64 = uint8ToBase64(pdfBytes);
+    const base = `${dscProtocol}://127.0.0.1:${dscPort}`;
+
+    // Signature placement: bottom-right of each page (PDF points, A4 = 595×842)
+    const sigParams = {
+      reason,
+      location: 'Rajkot',
+      // emBridge coordinate keys (lower-left / upper-right from page bottom)
+      llx: 395, lly: 20, urx: 580, ury: 80,
+      // DSC Signer alternative keys
+      x: 395, y: 20, width: 185, height: 60,
+      pageNo: -1,  // emBridge: -1 = all pages
+      page: -1,    // DSC Signer: -1 = all pages
+    };
+
+    // emSigner/emBridge eMudhra format (confirmed from emSigner Signer Gateway API)
+    const emBridgeBody = {
+      Name: 'HSD Oil Cost Certificate',
+      FileType: 'PDF',
+      SignatureType: '1',
+      SelectPage: 'All',          // sign all pages
+      SignaturePosition: 'Bottom-Right',
+      PageNumber: null,
+      CustomizeCoordinates: '395,20,185,60',  // left,top,width,height (bottom-right area)
+      PreviewRequired: false,
+      AuthToken: '',
+      File: pdfBase64,
+      IsCompressed: false,
+      reason,
+      location: 'Rajkot',
+    };
+
+    type Attempt = { directUrl: string; proxyEndpoint: string; body: Record<string, unknown> };
+
+    const attempts: Attempt[] = dscServiceType === 'embridge'
+      ? [
+          // emBridge eMudhra endpoints — port typically 26769
+          { directUrl: `${base}/signPdf`,        proxyEndpoint: '/signPdf',        body: emBridgeBody },
+          { directUrl: `${base}/sign`,           proxyEndpoint: '/sign',           body: emBridgeBody },
+          { directUrl: `${base}/api/sign`,       proxyEndpoint: '/api/sign',       body: emBridgeBody },
+        ]
+      : dscServiceType === 'dscsigner'
+      ? [
+          // DSC Signer Service 4.1 (NIC/eOffice) — port 55101
+          { directUrl: `${base}/sign`,           proxyEndpoint: '/sign',           body: { pdf: pdfBase64, pdfData: pdfBase64, ...sigParams } },
+          { directUrl: `${base}/signPdf`,        proxyEndpoint: '/signPdf',        body: { pdf: pdfBase64, pdfData: pdfBase64, ...sigParams } },
+          { directUrl: `${base}/dsc/sign`,       proxyEndpoint: '/dsc/sign',       body: { pdf: pdfBase64, ...sigParams } },
+        ]
+      : [ // auto-detect: try both service formats
+          { directUrl: `${base}/signPdf`,        proxyEndpoint: '/signPdf',        body: emBridgeBody },
+          { directUrl: `${base}/sign`,           proxyEndpoint: '/sign',           body: { pdf: pdfBase64, pdfData: pdfBase64, ...sigParams } },
+          { directUrl: `${base}/api/sign`,       proxyEndpoint: '/api/sign',       body: emBridgeBody },
+          { directUrl: `${base}/dsc/sign`,       proxyEndpoint: '/dsc/sign',       body: { pdf: pdfBase64, ...sigParams } },
+        ];
+
+    const extractSignedBytes = (result: Record<string, unknown>): Uint8Array | null => {
+      // Try all known response field names from both emBridge and DSC Signer
+      const b64 = (
+        result.SignedDocument || result.File || result.signedPdfData ||
+        result.signedPdf || result.data || result.pdf
+      ) as string | undefined;
+      if (!b64 || typeof b64 !== 'string') return null;
+      try {
+        return Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+      } catch { return null; }
+    };
+
+    for (const attempt of attempts) {
+      // Try direct browser → DSC service (best path, avoids proxy overhead)
+      try {
+        const resp = await fetch(attempt.directUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(attempt.body),
+          signal: AbortSignal.timeout(45000),
+        });
+        if (resp.ok) {
+          const result = await resp.json() as Record<string, unknown>;
+          const signed = extractSignedBytes(result);
+          if (signed) return signed;
+        }
+      } catch (_) { /* CORS or network error — try proxy */ }
+
+      // Try via server proxy (Docker → host.docker.internal → DSC service)
+      try {
+        const resp = await fetch('/api/dsc/sign', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            ...attempt.body,
+            _port: dscPort,
+            _protocol: dscProtocol,
+            _endpoint: attempt.proxyEndpoint,
+          }),
+          signal: AbortSignal.timeout(50000),
+        });
+        if (resp.ok) {
+          const result = await resp.json() as Record<string, unknown>;
+          const signed = extractSignedBytes(result);
+          if (signed) return signed;
+        }
+      } catch (_) { /* continue to next attempt */ }
+    }
+
+    return null;
+  };
+
+  // ─────────────────────────────────────────────────────────────────────────
 
   const parsePageRanges = (rangeStr: string, maxPages: number): number[] => {
     const pages = new Set<number>();
@@ -716,7 +918,10 @@ export default function App() {
 
   const generateCertificatesZip = async () => {
     setIsGenerating(true);
+    setSigningProgress(null);
+    setLastSigningReport(null);
     const zip = new JSZip();
+    let signedCount = 0, failedCount = 0, skippedCount = 0;
 
     try {
       for (const shed of selectedSheds) {
@@ -1006,10 +1211,29 @@ export default function App() {
           }
         }
 
-        const finalPdfBytes = await mergedPdf.save();
+        const rawBytes = await mergedPdf.save();
         const fileName = `${shed.shed_name}_${shed.railway}_RS_${Math.round(calc.total)}_${shed.coach_litres + (shed.is_power_car ? 0 : shed.goods_litres)}_LITRES_${shed.during_month}${shed.during_year}.pdf`;
-        zip.file(fileName, finalPdfBytes);
+
+        if (dscEnabled) {
+          const shedIdx = selectedSheds.indexOf(shed) + 1;
+          setSigningProgress({ current: shedIdx, total: selectedSheds.length, name: shed.shed_name });
+          const signed = await signPdfBytes(rawBytes, 'HSD Oil Cost Certificate');
+          if (signed) {
+            zip.file(fileName, signed);
+            signedCount++;
+          } else {
+            zip.file(fileName, rawBytes);
+            failedCount++;
+            console.warn(`DSC signing failed for ${shed.shed_name}, using unsigned PDF`);
+          }
+        } else {
+          zip.file(fileName, rawBytes);
+          skippedCount++;
+        }
       }
+
+      setSigningProgress(null);
+      if (dscEnabled) setLastSigningReport({ signed: signedCount, failed: failedCount, skipped: skippedCount });
 
       const zipContent = await zip.generateAsync({ type: 'blob' });
       const link = document.createElement('a');
@@ -1021,6 +1245,7 @@ export default function App() {
       alert('Error generating certificates. Please check console for details.');
     } finally {
       setIsGenerating(false);
+      setSigningProgress(null);
     }
   };
 
@@ -1565,6 +1790,169 @@ export default function App() {
                   <CheckCircle2 className="text-[#0052CC] w-5 h-5" />
                   <h2 className="text-sm font-bold uppercase tracking-widest text-[#6B7280]">Step 4: Final Review & Generate</h2>
                 </div>
+
+                {/* DSC Digital Signature Panel */}
+                <div className={`mb-6 rounded-xl border-2 transition-colors ${dscEnabled ? 'border-[#0052CC]/30 bg-[#F0F5FF]' : 'border-[#E5E7EB] bg-[#F9FAFB]'}`}>
+                  {/* Panel Header */}
+                  <div className="flex items-center justify-between px-5 py-4">
+                    <div className="flex items-center gap-3">
+                      <div className={`w-9 h-9 rounded-lg flex items-center justify-center ${dscEnabled ? 'bg-[#0052CC]' : 'bg-[#E5E7EB]'}`}>
+                        <KeyRound className={`w-5 h-5 ${dscEnabled ? 'text-white' : 'text-[#9CA3AF]'}`} />
+                      </div>
+                      <div>
+                        <p className="text-sm font-bold text-[#1A1A1A]">DSC Digital Signature</p>
+                        <p className="text-[11px] text-[#6B7280]">Sign all pages via emBridge or DSC Signer Service v4.1</p>
+                      </div>
+                    </div>
+                    {/* Toggle */}
+                    <button
+                      onClick={() => { setDscEnabled(e => !e); setLastSigningReport(null); }}
+                      className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none ${dscEnabled ? 'bg-[#0052CC]' : 'bg-[#D1D5DB]'}`}
+                    >
+                      <span className={`inline-block h-4 w-4 transform rounded-full bg-white shadow-sm transition-transform ${dscEnabled ? 'translate-x-6' : 'translate-x-1'}`} />
+                    </button>
+                  </div>
+
+                  {/* Panel Body (visible when enabled) */}
+                  <AnimatePresence>
+                    {dscEnabled && (
+                      <motion.div
+                        initial={{ opacity: 0, height: 0 }}
+                        animate={{ opacity: 1, height: 'auto' }}
+                        exit={{ opacity: 0, height: 0 }}
+                        className="overflow-hidden"
+                      >
+                        <div className="px-5 pb-5 space-y-4 border-t border-[#0052CC]/15">
+                          {/* Service Config Row */}
+                          <div className="pt-4 grid grid-cols-1 sm:grid-cols-3 gap-3">
+                            <div className="space-y-1">
+                              <label className="text-[10px] font-bold text-[#6B7280] uppercase tracking-wider">Service Type</label>
+                              <select
+                                value={dscServiceType}
+                                onChange={e => {
+                                  const t = e.target.value as typeof dscServiceType;
+                                  setDscServiceType(t);
+                                  setDscStatus('idle');
+                                  // Set default port based on service
+                                  if (t === 'embridge') setDscPort('26769');
+                                  else if (t === 'dscsigner') setDscPort('55101');
+                                  else setDscPort('55101');
+                                }}
+                                className="w-full bg-white border border-[#E5E7EB] rounded-lg px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-[#0052CC]"
+                              >
+                                <option value="auto">Auto-detect (port 55101)</option>
+                                <option value="embridge">emBridge eMudhra (port 26769)</option>
+                                <option value="dscsigner">DSC Signer Service v4.1 (port 55101)</option>
+                              </select>
+                            </div>
+                            <div className="space-y-1">
+                              <label className="text-[10px] font-bold text-[#6B7280] uppercase tracking-wider">Protocol</label>
+                              <select
+                                value={dscProtocol}
+                                onChange={e => { setDscProtocol(e.target.value as 'https' | 'http'); setDscStatus('idle'); }}
+                                className="w-full bg-white border border-[#E5E7EB] rounded-lg px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-[#0052CC]"
+                              >
+                                <option value="https">HTTPS (default)</option>
+                                <option value="http">HTTP (port 55100)</option>
+                              </select>
+                            </div>
+                            <div className="space-y-1">
+                              <label className="text-[10px] font-bold text-[#6B7280] uppercase tracking-wider">
+                                Port
+                                <span className="ml-1 text-[#9CA3AF] font-normal normal-case">
+                                  (DSC Signer: 55101 · emBridge: 26769)
+                                </span>
+                              </label>
+                              <input
+                                type="number"
+                                value={dscPort}
+                                onChange={e => { setDscPort(e.target.value); setDscStatus('idle'); }}
+                                className="w-full bg-white border border-[#E5E7EB] rounded-lg px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-[#0052CC]"
+                                placeholder="55101"
+                              />
+                            </div>
+                          </div>
+
+                          {/* Test Connection + Status */}
+                          <div className="flex items-center gap-3 flex-wrap">
+                            <button
+                              onClick={testDscConnection}
+                              disabled={dscStatus === 'testing'}
+                              className="flex items-center gap-2 px-4 py-2 bg-white border border-[#0052CC] text-[#0052CC] rounded-lg text-sm font-bold hover:bg-[#0052CC]/5 transition-colors disabled:opacity-50"
+                            >
+                              {dscStatus === 'testing'
+                                ? <Loader2 className="w-4 h-4 animate-spin" />
+                                : <RefreshCw className="w-4 h-4" />}
+                              {dscStatus === 'testing' ? 'Testing…' : 'Test Connection'}
+                            </button>
+
+                            {dscStatus !== 'idle' && (
+                              <div className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium ${
+                                dscStatus === 'online'  ? 'bg-green-50 text-green-700 border border-green-200' :
+                                dscStatus === 'offline' ? 'bg-red-50 text-red-700 border border-red-200' :
+                                'bg-blue-50 text-blue-700 border border-blue-200'
+                              }`}>
+                                {dscStatus === 'online'  && <ShieldCheck className="w-4 h-4" />}
+                                {dscStatus === 'offline' && <ShieldOff className="w-4 h-4" />}
+                                {dscStatus === 'testing' && <Loader2 className="w-4 h-4 animate-spin" />}
+                                <span>{dscStatusMessage}</span>
+                              </div>
+                            )}
+                          </div>
+
+                          {/* Info note */}
+                          <div className="flex gap-2 bg-[#FFFBEB] border border-[#FCD34D]/40 rounded-lg p-3">
+                            <AlertCircle className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" />
+                            <div className="text-[11px] text-amber-700 space-y-1">
+                              <p className="font-bold">Before using — checklist:</p>
+                              <p>1. Insert your USB DSC dongle and ensure emBridge or DSC Signer Service v4.1 is running (check Windows system tray).</p>
+                              <p>2. If using HTTPS, open <span className="font-mono font-bold">{dscProtocol}://127.0.0.1:{dscPort}</span> in your browser, click "Advanced → Proceed" to trust the self-signed certificate. Do this once per session.</p>
+                              <p>3. Use "Test Connection" to verify the service is reachable before generating.</p>
+                              <p>4. Signature stamp will be applied to the <strong>bottom-right corner of every page</strong>. If signing fails, the unsigned PDF is included in the ZIP (no data is lost).</p>
+                              <p className="text-amber-600">Port reference: DSC Signer Service v4.1 = <strong>55101</strong> (HTTPS) or 55100 (HTTP) · emBridge eMudhra = <strong>26769</strong></p>
+                            </div>
+                          </div>
+
+                          {/* Signing progress (live during generation) */}
+                          {signingProgress && (
+                            <div className="flex items-center gap-3 bg-[#EFF6FF] border border-[#93C5FD] rounded-lg px-4 py-3">
+                              <Loader2 className="w-4 h-4 text-[#0052CC] animate-spin shrink-0" />
+                              <div className="flex-1 min-w-0">
+                                <p className="text-sm font-bold text-[#0052CC]">
+                                  Signing {signingProgress.current} / {signingProgress.total}
+                                </p>
+                                <p className="text-[11px] text-[#6B7280] truncate">{signingProgress.name}</p>
+                              </div>
+                              <div className="w-24 bg-[#DBEAFE] rounded-full h-1.5">
+                                <div
+                                  className="bg-[#0052CC] h-1.5 rounded-full transition-all"
+                                  style={{ width: `${(signingProgress.current / signingProgress.total) * 100}%` }}
+                                />
+                              </div>
+                            </div>
+                          )}
+
+                          {/* Last signing report */}
+                          {lastSigningReport && !signingProgress && (
+                            <div className={`flex items-center gap-3 rounded-lg px-4 py-3 border text-sm ${
+                              lastSigningReport.failed > 0
+                                ? 'bg-amber-50 border-amber-200 text-amber-800'
+                                : 'bg-green-50 border-green-200 text-green-800'
+                            }`}>
+                              {lastSigningReport.failed > 0 ? <AlertCircle className="w-4 h-4 shrink-0" /> : <ShieldCheck className="w-4 h-4 shrink-0" />}
+                              <span>
+                                Last run: <strong>{lastSigningReport.signed} signed</strong>
+                                {lastSigningReport.failed > 0 && <span className="text-red-600">, {lastSigningReport.failed} failed (unsigned included)</span>}
+                              </span>
+                            </div>
+                          )}
+                        </div>
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+                </div>
+
+                {/* Generation Buttons */}
                 <div className="flex justify-end gap-4">
                   <button
                     disabled={selectedSheds.length === 0 || selectedSheds.some(s => !calculateAmounts(s)) || isGenerating}
@@ -1574,11 +1962,11 @@ export default function App() {
                     {isGenerating ? (
                       <>
                         <div className="w-5 h-5 border-2 border-[#0052CC]/30 border-t-[#0052CC] rounded-full animate-spin" />
-                        Generating...
+                        {signingProgress ? `Signing ${signingProgress.current}/${signingProgress.total}…` : 'Generating…'}
                       </>
                     ) : (
                       <>
-                        <FileText className="w-5 h-5" />
+                        {dscEnabled ? <Shield className="w-5 h-5" /> : <FileText className="w-5 h-5" />}
                         Download Certificates Only
                       </>
                     )}
@@ -1592,11 +1980,11 @@ export default function App() {
                     {isGenerating ? (
                       <>
                         <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                        Generating ZIP...
+                        {signingProgress ? `Signing ${signingProgress.current}/${signingProgress.total}…` : 'Generating ZIP…'}
                       </>
                     ) : (
                       <>
-                        <Download className="w-5 h-5" />
+                        {dscEnabled ? <ShieldCheck className="w-5 h-5" /> : <Download className="w-5 h-5" />}
                         Generate Full ZIP (with Vouchers)
                       </>
                     )}

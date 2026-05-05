@@ -10,6 +10,12 @@ services:
     environment:
       - NODE_ENV=production
       - DATABASE_PATH=/app/data/railway.db
+      # DSC_SIGNER_HOST defaults to host.docker.internal (Windows/Mac Docker Desktop)
+      # On Linux Docker, set this to the actual host IP if host.docker.internal doesn't resolve
+      - DSC_SIGNER_HOST=host.docker.internal
+    extra_hosts:
+      # Allows Docker container to reach the Windows host machine where DSC service runs
+      - "host.docker.internal:host-gateway"
     restart: always
 
   db-browser:

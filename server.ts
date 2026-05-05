@@ -3,6 +3,8 @@ import { createServer as createViteServer } from "vite";
 import Database from "better-sqlite3";
 import path from "path";
 import { fileURLToPath } from "url";
+import https from "node:https";
+import http from "node:http";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -93,6 +95,88 @@ app.post("/api/prices", (req, res) => {
 app.delete("/api/prices/:id", (req, res) => {
   db.prepare("DELETE FROM prices WHERE id = ?").run(req.params.id);
   res.json({ success: true });
+});
+
+// DSC Signer proxy — forwards requests from browser to local Windows DSC service
+// Uses host.docker.internal so the Docker container can reach the Windows host
+const DSC_HOST = process.env.DSC_SIGNER_HOST || "host.docker.internal";
+
+app.get("/api/dsc/health", (req, res) => {
+  const port = Number(req.query.port) || 55101;
+  const protocol = (req.query.protocol as string) || "https";
+  const lib = protocol === "https" ? https : http;
+
+  const options: https.RequestOptions = {
+    hostname: DSC_HOST,
+    port,
+    path: "/check/isLive",
+    method: "GET",
+    rejectUnauthorized: false,
+    timeout: 6000,
+  };
+
+  const proxyReq = lib.request(options, (proxyRes) => {
+    let data = "";
+    proxyRes.on("data", (chunk) => { data += chunk; });
+    proxyRes.on("end", () => {
+      res.json({ status: "online", statusCode: proxyRes.statusCode, body: data.slice(0, 200) });
+    });
+  });
+
+  proxyReq.on("timeout", () => {
+    proxyReq.destroy();
+    res.status(503).json({ status: "offline", error: "Connection timeout" });
+  });
+
+  proxyReq.on("error", (e) => {
+    res.status(503).json({ status: "offline", error: e.message });
+  });
+
+  proxyReq.end();
+});
+
+app.post("/api/dsc/sign", (req, res) => {
+  const { _port = 55101, _protocol = "https", _endpoint = "/signPdf", ...body } = req.body;
+  const lib = _protocol === "https" ? https : http;
+  const bodyStr = JSON.stringify(body);
+
+  const options: https.RequestOptions = {
+    hostname: DSC_HOST,
+    port: Number(_port),
+    path: _endpoint as string,
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Content-Length": Buffer.byteLength(bodyStr),
+    },
+    rejectUnauthorized: false,
+    timeout: 60000,
+  };
+
+  const proxyReq = lib.request(options, (proxyRes) => {
+    let data = "";
+    proxyRes.on("data", (chunk) => { data += chunk; });
+    proxyRes.on("end", () => {
+      try {
+        const parsed = JSON.parse(data);
+        res.status(proxyRes.statusCode || 200).json(parsed);
+      } catch {
+        res.status(500).json({ error: "Invalid JSON from signer service", raw: data.slice(0, 500) });
+      }
+    });
+  });
+
+  proxyReq.on("timeout", () => {
+    proxyReq.destroy();
+    res.status(504).json({ error: "Signer service timeout" });
+  });
+
+  proxyReq.on("error", (e) => {
+    res.status(502).json({ error: `Proxy error: ${e.message}` });
+  });
+
+  proxyReq.write(bodyStr);
+  proxyReq.end();
 });
 
 async function startServer() {
