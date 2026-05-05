@@ -205,11 +205,10 @@ export default function App() {
   const [sessions, setSessions] = useState<Session[]>([]);
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
   const [consumptionRecords, setConsumptionRecords] = useState<ConsumptionRecord[]>([]);
-  const [isSavingSession, setIsSavingSession] = useState(false);
   const [sessionName, setSessionName] = useState('');
   const [sessionDesc, setSessionDesc] = useState('');
-  const [showSaveSessionModal, setShowSaveSessionModal] = useState(false);
-  const [autoCompleteOnGenerate, setAutoCompleteOnGenerate] = useState(false);
+  const [sessionStatus, setSessionStatus] = useState<'in_progress' | 'completed'>('in_progress');
+  const [isSavingSession, setIsSavingSession] = useState(false);
 
   useEffect(() => {
     if (successMessage) {
@@ -300,8 +299,8 @@ export default function App() {
     }
     setSessionName('');
     setSessionDesc('');
+    setSessionStatus('in_progress');
     setShowPdfPreview(false);
-    setAutoCompleteOnGenerate(false);
     
     // Reset to defaults
     const d = new Date();
@@ -522,8 +521,8 @@ export default function App() {
   const generateCertificatesOnlyZip = async () => {
     setIsGenerating(true);
     
-    // Auto-save before generating
-    const sessionId = await saveCurrentSession(true);
+    // Auto-save/update before generating
+    const sessionId = await handleSaveAction(true);
     
     const zip = new JSZip();
 
@@ -745,11 +744,6 @@ export default function App() {
       link.href = URL.createObjectURL(zipContent);
       link.download = `HSD_Certificates_Only_${selectedMonth}_${selectedYear}.zip`;
       link.click();
-      
-      // Auto-complete logic
-      if (autoCompleteOnGenerate && sessionId) {
-        await completeSession(sessionId, true);
-      }
     } catch (error) {
       console.error('Error generating ZIP:', error);
       alert('Error generating certificates. Please check console for details.');
@@ -764,11 +758,8 @@ export default function App() {
     }
   };
 
-  const saveCurrentSession = async (silent = false) => {
-    if (!sessionName && !silent) return alert('Please enter a work log name');
-    
-    // Auto-generate name if silent and missing
-    const finalName = sessionName || `Work Log - ${new Date().toLocaleDateString('en-GB')} ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+  const handleSaveAction = async (silent = false) => {
+    const finalName = sessionName || `Log ${new Date().toLocaleDateString('en-GB')} ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
     
     setIsSavingSession(true);
     const sessionId = currentSessionId || Math.random().toString(36).substr(2, 9);
@@ -778,7 +769,7 @@ export default function App() {
       id: sessionId,
       name: finalName,
       description: sessionDesc,
-      is_completed: existingLog?.is_completed || false,
+      is_completed: sessionStatus === 'completed',
       created_at: existingLog?.created_at || new Date().toISOString(),
       updated_at: new Date().toISOString(),
       state: {
@@ -790,17 +781,23 @@ export default function App() {
         selectedSheds
       }
     };
+
     try {
       await fetch('/api/sessions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(newSession)
       });
+      
+      if (sessionStatus === 'completed') {
+        await fetch(`/api/sessions/${sessionId}/complete`, { method: 'PATCH' });
+        await recordAnalyticsData(selectedSheds, sessionId);
+      }
+
       setSessions(prev => [newSession, ...prev.filter(s => s.id !== newSession.id)]);
       setCurrentSessionId(sessionId);
       if (!sessionName) setSessionName(finalName);
-      setShowSaveSessionModal(false);
-      if (!silent) setSuccessMessage(currentSessionId ? 'Work log updated successfully' : 'Work log saved successfully');
+      if (!silent) setSuccessMessage(currentSessionId ? 'Work log updated' : 'Work log saved');
       return sessionId;
     } catch (e) {
       console.error('Save session error:', e);
@@ -869,6 +866,7 @@ export default function App() {
     setCurrentSessionId(session.id);
     setSessionName(session.name);
     setSessionDesc(session.description || '');
+    setSessionStatus(session.is_completed ? 'completed' : 'in_progress');
     setSelectedMonth(state.selectedMonth);
     setSelectedYear(state.selectedYear);
     setSelectedSupplyingShed(state.selectedSupplyingShed);
@@ -962,8 +960,8 @@ export default function App() {
   const generateCertificatesZip = async () => {
     setIsGenerating(true);
     
-    // Auto-save before generating
-    const sessionId = await saveCurrentSession(true);
+    // Auto-save/update before generating
+    const sessionId = await handleSaveAction(true);
     
     const zip = new JSZip();
 
@@ -1265,11 +1263,6 @@ export default function App() {
       link.href = URL.createObjectURL(zipContent);
       link.download = `HSD_Certificates_${selectedMonth}_${selectedYear}.zip`;
       link.click();
-
-      // Auto-complete logic
-      if (autoCompleteOnGenerate && sessionId) {
-        await completeSession(sessionId, true);
-      }
     } catch (error) {
       console.error('Error generating ZIP:', error);
       alert('Error generating certificates. Please check console for details.');
@@ -1388,7 +1381,7 @@ export default function App() {
                     New Log
                   </button>
                   <button
-                    onClick={() => setShowSaveSessionModal(true)}
+                    onClick={() => handleSaveAction()}
                     className="px-4 py-2 bg-[#0052CC] text-white rounded-xl text-xs font-bold shadow-lg shadow-[#0052CC]/10 hover:shadow-[#0052CC]/20 flex items-center gap-2 transition-all active:scale-95"
                   >
                     <Save className="w-4 h-4" />
@@ -1397,74 +1390,7 @@ export default function App() {
                 </div>
               </div>
 
-              {/* Save Session Modal */}
-              <AnimatePresence>
-                {showSaveSessionModal && (
-                  <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
-                    <motion.div
-                      initial={{ scale: 0.9, opacity: 0 }}
-                      animate={{ scale: 1, opacity: 1 }}
-                      exit={{ scale: 0.9, opacity: 0 }}
-                      className="bg-white rounded-3xl p-8 max-w-md w-full shadow-2xl space-y-6"
-                    >
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-3">
-                          <div className="bg-[#0052CC]/10 p-2 rounded-xl text-[#0052CC]">
-                            <Save className="w-6 h-6" />
-                          </div>
-                          <h3 className="text-xl font-bold">{currentSessionId ? 'Update Work Log' : 'Save Work Log'}</h3>
-                        </div>
-                        <button onClick={() => setShowSaveSessionModal(false)} className="p-2 hover:bg-gray-100 rounded-full transition-colors">
-                          <X className="w-5 h-5 text-gray-400" />
-                        </button>
-                      </div>
-                      
-                      <div className="space-y-4">
-                        <div className="space-y-1.5">
-                          <label className="text-xs font-bold text-gray-500 uppercase ml-1">Log Name</label>
-                          <input
-                            type="text"
-                            placeholder="e.g. Feb 2026 Batch A"
-                            value={sessionName}
-                            onChange={(e) => setSessionName(e.target.value)}
-                            className="w-full bg-gray-50 border border-gray-200 rounded-xl px-4 py-3 text-sm font-bold focus:ring-2 focus:ring-[#0052CC] outline-none"
-                          />
-                        </div>
-                        <div className="space-y-1.5">
-                          <label className="text-xs font-bold text-gray-500 uppercase ml-1">Description (Optional)</label>
-                          <textarea
-                            placeholder="Add notes about this work session..."
-                            value={sessionDesc}
-                            onChange={(e) => setSessionDesc(e.target.value)}
-                            className="w-full bg-gray-50 border border-gray-200 rounded-xl px-4 py-3 text-sm font-medium focus:ring-2 focus:ring-[#0052CC] outline-none min-h-[100px] resize-none"
-                          />
-                        </div>
-                      </div>
-
-                      <div className="pt-4 flex gap-3">
-                        <button
-                          onClick={() => setShowSaveSessionModal(false)}
-                          className="flex-1 px-4 py-3 rounded-xl font-bold text-sm text-gray-500 hover:bg-gray-50 transition-all"
-                        >
-                          Cancel
-                        </button>
-                        <button
-                          onClick={saveCurrentSession}
-                          disabled={isSavingSession || !sessionName}
-                          className="flex-3 bg-[#0052CC] text-white px-8 py-3 rounded-xl font-bold text-sm shadow-lg shadow-[#0052CC]/20 hover:scale-[1.02] transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
-                        >
-                          {isSavingSession ? (
-                            <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                          ) : (
-                            <Save className="w-4 h-4" />
-                          )}
-                          {currentSessionId ? 'Update Work Log' : 'Save Work Log'}
-                        </button>
-                      </div>
-                    </motion.div>
-                  </div>
-                )}
-              </AnimatePresence>
+              {/* Step 4 Sections */}
               {/* Step 1: Global Config */}
               <section className="bg-white rounded-2xl shadow-sm border border-[#E5E7EB] p-6">
                 <div className="flex items-center gap-2 mb-6">
@@ -1945,87 +1871,79 @@ export default function App() {
               <section className="bg-white rounded-2xl shadow-sm border border-[#E5E7EB] p-6 lg:p-8">
                 <div className="flex items-center gap-2 mb-8">
                   <CheckCircle2 className="text-[#0052CC] w-5 h-5" />
-                  <h2 className="text-sm font-bold uppercase tracking-[0.2em] text-[#6B7280]">Step 4: Final Review & Generate</h2>
+                  <h2 className="text-sm font-bold uppercase tracking-[0.2em] text-[#6B7280]">Step 4: Save & Generate Package</h2>
                 </div>
                 
-                <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 items-stretch">
-                  {/* Left: Session Lifecycle Management */}
-                  <div className="bg-[#F9FAFB] rounded-3xl border border-[#E5E7EB] p-6 flex flex-col justify-between">
-                    <div>
-                      <div className="flex items-start justify-between mb-2">
-                        <h3 className="font-bold text-[#1A1A1A]">Work Log Lifecycle</h3>
-                        <span className={cn(
-                          "px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-wider",
-                          currentSessionId ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-700"
-                        )}>
-                          {currentSessionId ? 'Session Saved' : 'Temporary Draft'}
-                        </span>
-                      </div>
-                      <p className="text-xs text-[#6B7280] leading-relaxed mb-6">
-                        Manage how this generation is tracked in your persistent history and analytics dashboard.
-                      </p>
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+                  {/* Log Identity */}
+                  <div className="space-y-4">
+                    <div className="space-y-1.5">
+                      <label className="text-[10px] font-bold text-[#6B7280] uppercase ml-1">Log Name</label>
+                      <input
+                        placeholder="e.g. Feb 2026 Batch A"
+                        value={sessionName}
+                        onChange={(e) => setSessionName(e.target.value)}
+                        className="w-full bg-[#F9FAFB] border border-[#E5E7EB] rounded-xl px-4 py-3 text-sm font-bold focus:ring-2 focus:ring-[#0052CC] outline-none h-[46px]"
+                      />
                     </div>
-
-                    <div className="space-y-4">
-                      <button
-                        onClick={() => setShowSaveSessionModal(true)}
-                        className="w-full bg-white border border-[#E5E7EB] hover:border-[#0052CC] text-[#1A1A1A] hover:text-[#0052CC] p-4 rounded-2xl font-bold text-sm transition-all flex items-center justify-center gap-2 shadow-sm group active:scale-95"
-                      >
-                        <Save className="w-4 h-4" />
-                        {currentSessionId ? 'Update Saved Work Log' : 'Save as New Work Log'}
-                      </button>
-
-                      <div className="flex items-center gap-3 bg-white p-4 rounded-2xl border border-gray-100 shadow-sm">
-                        <input
-                          type="checkbox"
-                          id="autoComplete"
-                          checked={autoCompleteOnGenerate}
-                          onChange={async (e) => {
-                            setAutoCompleteOnGenerate(e.target.checked);
-                            if (e.target.checked && !currentSessionId) {
-                              await saveCurrentSession(true);
-                            }
-                          }}
-                          className="w-6 h-6 rounded-lg border-gray-300 text-[#0052CC] focus:ring-[#0052CC] cursor-pointer"
-                        />
-                        <label htmlFor="autoComplete" className="text-sm font-bold text-[#1A1A1A] cursor-pointer select-none leading-tight">
-                          Finalize & Archive on Download
-                          <p className="text-[10px] font-medium text-emerald-600 mt-1 uppercase tracking-tight">Syncs data to analytics automatically</p>
-                        </label>
-                      </div>
+                    <div className="space-y-1.5">
+                      <label className="text-[10px] font-bold text-[#6B7280] uppercase ml-1">Notes</label>
+                      <textarea
+                        placeholder="Optional notes..."
+                        value={sessionDesc}
+                        onChange={(e) => setSessionDesc(e.target.value)}
+                        className="w-full bg-[#F9FAFB] border border-[#E5E7EB] rounded-xl px-4 py-3 text-sm font-medium focus:ring-2 focus:ring-[#0052CC] outline-none h-[80px] resize-none"
+                      />
                     </div>
                   </div>
 
-                  {/* Right: Generation Actions */}
-                  <div className="flex flex-col gap-4">
+                  {/* Status & Save */}
+                  <div className="space-y-4 flex flex-col justify-between">
+                    <div className="space-y-1.5">
+                      <label className="text-[10px] font-bold text-[#6B7280] uppercase ml-1">Processing Status</label>
+                      <select
+                        value={sessionStatus}
+                        onChange={(e) => setSessionStatus(e.target.value as any)}
+                        className={cn(
+                          "w-full border rounded-xl px-4 py-3 text-sm font-bold outline-none h-[46px] transition-all",
+                          sessionStatus === 'completed' ? "bg-emerald-50 border-emerald-200 text-emerald-700" : "bg-[#F9FAFB] border-[#E5E7EB] text-[#1A1A1A]"
+                        )}
+                      >
+                        <option value="in_progress">In Progress (Draft)</option>
+                        <option value="completed">Completed (Finalized)</option>
+                      </select>
+                      <p className="text-[10px] text-[#6B7280] mt-1 italic">
+                        {sessionStatus === 'completed' ? 'Finalizing will lock the record and sync analytics.' : 'In Progress allows further edits.'}
+                      </p>
+                    </div>
+
+                    <button
+                      onClick={() => handleSaveAction()}
+                      disabled={isSavingSession}
+                      className="w-full bg-white border border-[#0052CC] text-[#0052CC] p-4 rounded-xl font-bold text-sm hover:bg-[#0052CC]/5 transition-all flex items-center justify-center gap-2 active:scale-95"
+                    >
+                      {isSavingSession ? <div className="w-4 h-4 border-2 border-[#0052CC]/20 border-t-[#0052CC] rounded-full animate-spin" /> : <Save className="w-4 h-4" />}
+                      {currentSessionId ? 'Update Record' : 'Save Permanent Log'}
+                    </button>
+                  </div>
+
+                  {/* Download Actions */}
+                  <div className="flex flex-col gap-3">
                     <button
                       disabled={selectedSheds.length === 0 || selectedSheds.some(s => !calculateAmounts(s)) || isGenerating}
                       onClick={generateCertificatesOnlyZip}
-                      className="flex-1 bg-white border-2 border-[#0052CC] text-[#0052CC] disabled:border-[#E5E7EB] disabled:text-[#9CA3AF] disabled:cursor-not-allowed p-6 rounded-3xl font-bold text-lg shadow-sm hover:bg-[#0052CC]/5 transition-all flex flex-col items-center justify-center gap-2 active:scale-[0.98]"
+                      className="flex-1 bg-[#0052CC] text-white disabled:bg-[#E5E7EB] p-4 rounded-2xl font-bold text-sm shadow-lg shadow-[#0052CC]/10 hover:shadow-[#0052CC]/20 transition-all flex items-center justify-center gap-3 active:scale-[0.98]"
                     >
-                      {isGenerating ? (
-                        <div className="w-8 h-8 border-3 border-[#0052CC]/30 border-t-[#0052CC] rounded-full animate-spin" />
-                      ) : (
-                        <>
-                          <FileText className="w-8 h-8 mb-1" />
-                          <span>Download Certificates Only</span>
-                        </>
-                      )}
+                      {isGenerating ? <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" /> : <Download className="w-5 h-5" />}
+                      Download Package
                     </button>
-
                     <button
                       disabled={selectedSheds.length === 0 || selectedSheds.some(s => !calculateAmounts(s)) || isGenerating}
                       onClick={generateCertificatesZip}
-                      className="flex-1 bg-[#0052CC] disabled:bg-[#E5E7EB] disabled:cursor-not-allowed text-white p-6 rounded-3xl font-bold text-lg shadow-lg shadow-[#0052CC]/20 hover:shadow-xl hover:shadow-[#0052CC]/30 transition-all flex flex-col items-center justify-center gap-2 active:scale-[0.98]"
+                      className="bg-[#0052CC]/5 border border-[#0052CC]/20 text-[#0052CC] disabled:opacity-50 p-3 rounded-xl font-bold text-xs hover:bg-[#0052CC]/10 transition-all flex items-center justify-center gap-2"
                     >
-                      {isGenerating ? (
-                        <div className="w-8 h-8 border-3 border-white/30 border-t-white rounded-full animate-spin" />
-                      ) : (
-                        <>
-                          <Download className="w-8 h-8 mb-1" />
-                          <span>Download Full Package (ZIP)</span>
-                        </>
-                      )}
+                      <FileText className="w-4 h-4" />
+                      Certificates Only
                     </button>
                   </div>
                 </div>

@@ -98,10 +98,9 @@ export const Sessions: React.FC<WorkLogsProps> = ({ sessions, currentSessionId, 
 
             {/* Clickable Content area */}
             <div 
-              onClick={() => !session.is_completed && onLoad(session)}
+              onClick={() => onLoad(session)}
               className={cn(
-                "p-6 flex flex-col h-full cursor-pointer",
-                session.is_completed && "cursor-default"
+                "p-6 flex flex-col h-full cursor-pointer"
               )}
             >
               <div className="flex items-center gap-4 mb-5">
