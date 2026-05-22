@@ -5,7 +5,7 @@ import { fileURLToPath } from "url";
 import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
 import multer from 'multer';
-import db from './db';
+import db from './db.ts';
 import dotenv from 'dotenv';
 import fs from 'fs';
 
