@@ -57,7 +57,10 @@ export const Sessions: React.FC<WorkLogsProps> = ({ sessions, currentSessionId, 
             exit={{ opacity: 0, scale: 0.95 }}
             className={cn(
               "bg-white border rounded-3xl shadow-sm hover:shadow-xl transition-all duration-300 relative group",
-              session.is_completed ? "border-emerald-200 bg-emerald-50/10" : "border-[#E5E7EB]",
+              session.status === 'APPROVED' ? "border-emerald-200 bg-emerald-50/10" : 
+              session.status === 'PENDING' ? "border-amber-200 bg-amber-50/10" :
+              session.status === 'REJECTED' ? "border-red-200 bg-red-50/10" :
+              "border-[#E5E7EB]",
               currentSessionId === session.id && "border-[#0052CC] ring-2 ring-[#0052CC]/10"
             )}
           >
@@ -68,16 +71,15 @@ export const Sessions: React.FC<WorkLogsProps> = ({ sessions, currentSessionId, 
             )}
             {/* Action Buttons - Ensure they are above everything */}
             <div className="absolute top-6 right-6 flex items-center gap-2 z-[100]">
-              {!session.is_completed && (
+              {(session.status === 'DRAFT' || session.status === 'REJECTED') && (
                 <button 
                   onClick={(e) => { 
                     e.preventDefault();
                     e.stopPropagation(); 
-                    console.log('Finalizing session:', session.id);
                     onComplete(session.id); 
                   }}
                   className="p-3 text-emerald-600 bg-white hover:bg-emerald-50 rounded-2xl transition-all shadow-xl border border-emerald-100 cursor-pointer active:scale-75 hover:scale-110 pointer-events-auto"
-                  title="Mark as Completed"
+                  title="Submit for Approval"
                 >
                   <CheckCircle2 className="w-5 h-5" />
                 </button>
@@ -129,34 +131,44 @@ export const Sessions: React.FC<WorkLogsProps> = ({ sessions, currentSessionId, 
               <div className="grid grid-cols-2 gap-4 mb-6">
                 <div className="bg-white border border-gray-100 rounded-2xl p-3.5 shadow-sm">
                   <p className="text-[10px] font-black text-[#9CA3AF] uppercase tracking-wider mb-1.5">Period</p>
-                  <p className="text-xs font-bold text-[#1A1A1A]">{session.state.selectedMonth} {session.state.selectedYear}</p>
+                  <p className="text-xs font-bold text-[#1A1A1A]">{session.month} {session.year}</p>
                 </div>
                 <div className="bg-white border border-gray-100 rounded-2xl p-3.5 shadow-sm">
                   <p className="text-[10px] font-black text-[#9CA3AF] uppercase tracking-wider mb-1.5">Inventory</p>
-                  <p className="text-xs font-bold text-[#1A1A1A]">{session.state.selectedSheds.length} Sheds Added</p>
+                  <p className="text-xs font-bold text-[#1A1A1A]">{session.data?.selectedSheds?.length || 0} Sheds</p>
                 </div>
               </div>
 
               <div className="mt-auto flex items-center justify-between pt-4 border-t border-gray-50">
-                {session.is_completed ? (
+                {session.status === 'APPROVED' ? (
                   <div className="flex items-center gap-2">
                     <div className="h-2 w-2 rounded-full bg-emerald-500" />
-                    <span className="text-[10px] font-black text-emerald-600 uppercase tracking-widest">Completed</span>
+                    <span className="text-[10px] font-black text-emerald-600 uppercase tracking-widest">Approved</span>
+                  </div>
+                ) : session.status === 'PENDING' ? (
+                  <div className="flex items-center gap-2">
+                    <div className="h-2 w-2 rounded-full bg-amber-500 animate-pulse" />
+                    <span className="text-[10px] font-black text-amber-600 uppercase tracking-widest">Pending Approval</span>
+                  </div>
+                ) : session.status === 'REJECTED' ? (
+                  <div className="flex items-center gap-2">
+                    <div className="h-2 w-2 rounded-full bg-red-500" />
+                    <span className="text-[10px] font-black text-red-600 uppercase tracking-widest">Rejected</span>
                   </div>
                 ) : (
                   <div className="flex items-center gap-2">
-                    <div className="h-2 w-2 rounded-full bg-amber-500 animate-pulse" />
-                    <span className="text-[10px] font-black text-amber-600 uppercase tracking-widest">In Progress</span>
+                    <div className="h-2 w-2 rounded-full bg-gray-400" />
+                    <span className="text-[10px] font-black text-gray-500 uppercase tracking-widest">Draft</span>
                   </div>
                 )}
                 
                 <div className={cn(
                   "px-4 py-2 rounded-xl font-bold text-xs transition-all flex items-center gap-2",
-                  session.is_completed 
+                  (session.status !== 'DRAFT' && session.status !== 'REJECTED')
                     ? "text-gray-400" 
                     : "text-[#0052CC] group-hover:bg-[#0052CC] group-hover:text-white"
                 )}>
-                  {session.is_completed ? "Archived" : "Resume"}
+                  {(session.status !== 'DRAFT' && session.status !== 'REJECTED') ? "View Only" : "Resume"}
                   <ChevronRight className="w-3.5 h-3.5" />
                 </div>
               </div>
