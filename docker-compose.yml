@@ -16,7 +16,7 @@ services:
       - "2996:8080"
     volumes:
       - railway-data:/data
-    entrypoint: ["sqlite-web", "-H", "0.0.0.0", "-p", "8080", "/data/railway.db"]
+    entrypoint: ["sqlite_web", "-H", "0.0.0.0", "-p", "8080", "/data/railway.db"]
     restart: always
 
 volumes:
