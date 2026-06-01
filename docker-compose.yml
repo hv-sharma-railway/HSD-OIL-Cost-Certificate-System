@@ -1,8 +1,10 @@
+version: '3.8'
+
 services:
   app:
     build: .
     ports:
-      - "2997:3000"
+      - "3000:3000"
     volumes:
       - railway-data:/app/data
     environment:
@@ -13,10 +15,10 @@ services:
   db-browser:
     image: coleifer/sqlite-web
     ports:
-      - "2996:8080"
+      - "8080:8080"
     volumes:
       - railway-data:/data
-    entrypoint: ["sqlite_web", "-H", "0.0.0.0", "-p", "8080", "/data/railway.db"]
+    command: /data/railway.db
     restart: always
 
 volumes:

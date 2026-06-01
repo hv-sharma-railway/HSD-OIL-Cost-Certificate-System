@@ -28,20 +28,6 @@ export interface ShedMasterEntry {
   railway: string;
 }
 
-export interface SupplyingShedEntry {
-  id: string;
-  shed_name: string;
-  railway: string;
-}
-
-export interface User {
-  id: string;
-  username: string;
-  role: 'ADMIN' | 'SHED_MANAGER';
-  shed_id?: string;
-  supplying_shed_id?: string;
-}
-
 export interface SelectedShed extends ShedMasterEntry {
   instanceId: string;
   for_month: string;
@@ -73,13 +59,12 @@ export const COACH_ALLOCATION = '10021127';
 
 export interface Session {
   id: string;
-  user_id: string;
-  month: string;
-  year: string;
-  status: 'DRAFT' | 'PENDING' | 'APPROVED' | 'REJECTED';
   name: string;
   description: string;
-  data: {
+  is_completed: boolean;
+  created_at: string;
+  updated_at: string;
+  state: {
     selectedMonth: string;
     selectedYear: string;
     selectedSupplyingShed: string;
@@ -87,11 +72,6 @@ export interface Session {
     masterVoucherPdfName: string | null;
     selectedSheds: SelectedShed[];
   };
-  created_at: string;
-  updated_at: string;
-  approved_at?: string;
-  approved_by?: string;
-  owner_name?: string; // from JOIN with users
 }
 
 export interface ConsumptionRecord {

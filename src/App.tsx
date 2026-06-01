@@ -21,10 +21,7 @@ import {
   History,
   TrendingUp,
   BarChart3,
-  Save,
-  ShieldCheck,
-  LogIn,
-  Clock
+  Save
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { jsPDF } from 'jspdf';
@@ -40,9 +37,6 @@ import { Sessions as WorkLogs } from './components/Sessions';
 // Set worker source for pdfjs-dist - Using unpkg for better reliability
 const PDF_WORKER_URL = `https://unpkg.com/pdfjs-dist@${pdfjsLib.version}/build/pdf.worker.min.mjs`;
 pdfjsLib.GlobalWorkerOptions.workerSrc = PDF_WORKER_URL;
-
-import { AuthProvider, useAuth } from './contexts/AuthContext';
-import { Login } from './components/Login';
 
 // PDF Canvas Renderer Component
 const PdfCanvasRenderer = ({ pdfData }: { pdfData: string }) => {
@@ -172,7 +166,6 @@ import {
   INITIAL_SHED_MASTER, 
   INITIAL_PRICE_MASTER, 
   ShedMasterEntry, 
-  SupplyingShedEntry,
   PriceMasterEntry, 
   PriceData,
   SelectedShed,
@@ -183,34 +176,7 @@ import {
 } from './types';
 
 export default function App() {
-  return (
-    <AuthProvider>
-      <MainApp />
-    </AuthProvider>
-  );
-}
-
-import { AdminPortal } from './components/AdminPortal';
-
-const NavButton = ({ active, onClick, icon, label }: { active: boolean, onClick: () => void, icon: React.ReactNode, label: string }) => (
-  <button
-    onClick={onClick}
-    className={cn(
-      "px-3 py-1.5 rounded-lg text-[11px] font-black uppercase tracking-wider transition-all duration-200 flex items-center gap-2",
-      active 
-        ? "bg-white text-[#0052CC] shadow-sm ring-1 ring-black/5" 
-        : "text-gray-500 hover:text-gray-900 hover:bg-gray-200/50"
-    )}
-  >
-    {icon}
-    {label}
-  </button>
-);
-
-function MainApp() {
-  const { user, isAuthenticated, logout, token } = useAuth();
-  
-  const [activeTab, setActiveTab] = useState<'generate' | 'prices' | 'sheds' | 'worklogs' | 'analytics' | 'admin'>('generate');
+  const [activeTab, setActiveTab] = useState<'generate' | 'prices' | 'sheds' | 'worklogs' | 'analytics'>('generate');
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [selectedMonth, setSelectedMonth] = useState(() => {
     const d = new Date();
@@ -224,7 +190,6 @@ function MainApp() {
   });
   const [priceMaster, setPriceMaster] = useState<PriceMasterEntry[]>([]);
   const [shedMaster, setShedMaster] = useState<ShedMasterEntry[]>([]);
-  const [supplyingShedMaster, setSupplyingShedMaster] = useState<SupplyingShedEntry[]>([]);
   const [selectedSupplyingShed, setSelectedSupplyingShed] = useState('HXP');
   const [selectedSheds, setSelectedSheds] = useState<SelectedShed[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
@@ -242,26 +207,9 @@ function MainApp() {
   const [consumptionRecords, setConsumptionRecords] = useState<ConsumptionRecord[]>([]);
   const [sessionName, setSessionName] = useState('');
   const [sessionDesc, setSessionDesc] = useState('');
-  const [sessionStatus, setSessionStatus] = useState<'DRAFT' | 'PENDING' | 'APPROVED' | 'REJECTED'>('DRAFT');
-  const isCompleted = sessionStatus === 'APPROVED';
-  const isPending = sessionStatus === 'PENDING';
-  const isRejected = sessionStatus === 'REJECTED';
-  const canEdit = sessionStatus === 'DRAFT' || sessionStatus === 'REJECTED';
-  const isAdmin = user?.role === 'ADMIN';
-  const isManager = user?.role === 'SHED_MANAGER';
-
+  const [sessionStatus, setSessionStatus] = useState<'in_progress' | 'completed'>('in_progress');
+  const isCompleted = sessionStatus === 'completed';
   const [isSavingSession, setIsSavingSession] = useState(false);
-
-  // Lock supplying shed for managers
-  useEffect(() => {
-    if (isManager && user?.shed_id) {
-       // Convert ID format if necessary (e.g., CR_PUNE to PUNE-CR)
-       const displayId = user.shed_id.includes('_') 
-         ? `${user.shed_id.split('_')[1]}-${user.shed_id.split('_')[0]}`
-         : user.shed_id;
-       setSelectedSupplyingShed(displayId);
-    }
-  }, [isManager, user]);
 
   useEffect(() => {
     if (successMessage) {
@@ -290,40 +238,49 @@ function MainApp() {
 
   // Fetch initial data
   useEffect(() => {
-    if (!isAuthenticated) return;
-    
     const fetchData = async () => {
       try {
-        const headers = { 'Authorization': `Bearer ${token}` };
-        const responses = await Promise.all([
-          fetch('/api/sheds', { headers }),
-          fetch('/api/supplying-sheds', { headers }),
-          fetch('/api/prices', { headers }),
-          fetch('/api/sessions', { headers }),
-          fetch('/api/analytics', { headers })
+        const [shedsRes, pricesRes, sessionsRes, analyticsRes] = await Promise.all([
+          fetch('/api/sheds'),
+          fetch('/api/prices'),
+          fetch('/api/sessions'),
+          fetch('/api/analytics')
         ]);
-
-        const data = await Promise.all(responses.map(async (res) => {
-          if (!res.ok) {
-            const text = await res.text();
-            throw new Error(`API error ${res.status}: ${text.substring(0, 100)}`);
-          }
-          return res.json();
-        }));
-
-        const [sheds, supplyingSheds, prices, loadedSessions, loadedAnalytics] = data;
+        const sheds = await shedsRes.json();
+        const prices = await pricesRes.json();
+        const loadedSessions = await sessionsRes.json();
+        const loadedAnalytics = await analyticsRes.json();
         
-        setShedMaster(sheds);
-        setSupplyingShedMaster(supplyingSheds);
-        setPriceMaster(prices);
+        setShedMaster(sheds.length > 0 ? sheds : INITIAL_SHED_MASTER);
+        setPriceMaster(prices.length > 0 ? prices : INITIAL_PRICE_MASTER);
         setSessions(loadedSessions);
         setConsumptionRecords(loadedAnalytics);
+
+        // If initial data was empty, populate DB with defaults
+        if (sheds.length === 0) {
+          for (const s of INITIAL_SHED_MASTER) {
+            await fetch('/api/sheds', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(s)
+            });
+          }
+        }
+        if (prices.length === 0) {
+          for (const p of INITIAL_PRICE_MASTER) {
+            await fetch('/api/prices', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(p)
+            });
+          }
+        }
       } catch (error) {
         console.error('Error fetching data:', error);
       }
     };
     fetchData();
-  }, [isAuthenticated, token]);
+  }, []);
 
   const createNewLog = () => {
     if (selectedSheds.length > 0) {
@@ -362,8 +319,8 @@ function MainApp() {
 
   const filteredSheds = useMemo(() => {
     return shedMaster.filter(shed => 
-      (shed.shed_name?.toLowerCase() || '').includes(searchTerm.toLowerCase()) ||
-      (shed.railway?.toLowerCase() || '').includes(searchTerm.toLowerCase())
+      shed.shed_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      shed.railway.toLowerCase().includes(searchTerm.toLowerCase())
     );
   }, [searchTerm, shedMaster]);
 
@@ -807,14 +764,16 @@ function MainApp() {
     
     setIsSavingSession(true);
     const sessionId = currentSessionId || Math.random().toString(36).substr(2, 9);
+    const existingLog = sessions.find(s => s.id === sessionId);
 
-    const newSession: any = {
+    const newSession: Session = {
       id: sessionId,
       name: finalName,
       description: sessionDesc,
-      month: selectedMonth,
-      year: selectedYear,
-      data: {
+      is_completed: sessionStatus === 'completed',
+      created_at: existingLog?.created_at || new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+      state: {
         selectedMonth,
         selectedYear,
         selectedSupplyingShed,
@@ -825,16 +784,16 @@ function MainApp() {
     };
 
     try {
-      const res = await fetch('/api/sessions', {
+      await fetch('/api/sessions', {
         method: 'POST',
-        headers: { 
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(newSession)
       });
       
-      if (!res.ok) throw new Error('Failed to save session');
+      if (sessionStatus === 'completed') {
+        await fetch(`/api/sessions/${sessionId}/complete`, { method: 'PATCH' });
+        await recordAnalyticsData(selectedSheds, sessionId);
+      }
 
       setSessions(prev => [newSession, ...prev.filter(s => s.id !== newSession.id)]);
       setCurrentSessionId(sessionId);
@@ -851,42 +810,48 @@ function MainApp() {
   };
 
   const completeSession = async (id: string, skipConfirm = false) => {
-    if (!skipConfirm && !window.confirm('Submit this session for admin approval? \n\nYou will not be able to edit it until it is reviewed.')) {
+    const logToComplete = sessions.find(s => s.id === id);
+    if (!logToComplete) return;
+
+    if (!skipConfirm && !window.confirm('Mark this work log as COMPLETED? \n\nThis will freeze the data and sync it to the dashboard analytics.')) {
       return;
     }
 
     try {
-      await fetch(`/api/sessions/${id}/submit`, { 
-        method: 'POST',
-        headers: { 'Authorization': `Bearer ${token}` }
-      });
+      await fetch(`/api/sessions/${id}/complete`, { method: 'PATCH' });
       
-      setSessions(prev => prev.map(s => s.id === id ? { ...s, status: 'PENDING' } : s));
-      setSuccessMessage('Session submitted for approval');
+      // Record analytics data
+      await recordAnalyticsData(logToComplete.state.selectedSheds, id);
+      
+      setSessions(prev => prev.map(s => s.id === id ? { ...s, is_completed: true } : s));
+      setSuccessMessage('Work log marked as completed');
+      
+      // Refresh analytics
+      const analyticsRes = await fetch('/api/analytics');
+      const updatedAnalytics = await analyticsRes.json();
+      setConsumptionRecords(updatedAnalytics);
       
       if (currentSessionId === id) {
-        setSessionStatus('PENDING');
+        setCurrentSessionId(null);
+        setSelectedSheds([]);
       }
     } catch (e) {
-      console.error('Submit session error:', e);
-      alert('Error submitting session');
+      console.error('Complete session error:', e);
+      alert('Error finalizing work log');
     }
   };
 
   const deleteSession = async (id: string) => {
-    if (!window.confirm('DELETE this work log? \n\nThis action cannot be undone.')) {
+    if (!window.confirm('DELETE this work log? \n\nThis action cannot be undone and will remove associated records from analytics.')) {
       return;
     }
 
     try {
-      await fetch(`/api/sessions/${id}`, { 
-        method: 'DELETE',
-        headers: { 'Authorization': `Bearer ${token}` }
-      });
+      await fetch(`/api/sessions/${id}`, { method: 'DELETE' });
       setSessions(prev => prev.filter(s => s.id !== id));
       if (currentSessionId === id) setCurrentSessionId(null);
       
-      // Refresh analytics
+      // Refresh analytics as records are deleted cascade
       const analyticsRes = await fetch('/api/analytics');
       const updatedAnalytics = await analyticsRes.json();
       setConsumptionRecords(updatedAnalytics);
@@ -897,14 +862,14 @@ function MainApp() {
     }
   };
 
-  const loadSession = (session: any) => {
-    const state = typeof session.data === 'string' ? JSON.parse(session.data) : session.data;
+  const loadSession = (session: Session) => {
+    const { state } = session;
     setCurrentSessionId(session.id);
     setSessionName(session.name);
     setSessionDesc(session.description || '');
-    setSessionStatus(session.status);
-    setSelectedMonth(session.month);
-    setSelectedYear(session.year);
+    setSessionStatus(session.is_completed ? 'completed' : 'in_progress');
+    setSelectedMonth(state.selectedMonth);
+    setSelectedYear(state.selectedYear);
     setSelectedSupplyingShed(state.selectedSupplyingShed);
     setMasterVoucherPdf(state.masterVoucherPdf);
     setMasterVoucherPdfName(state.masterVoucherPdfName);
@@ -934,6 +899,38 @@ function MainApp() {
     setSuccessMessage('Work log loaded successfully');
   };
 
+  const recordAnalyticsData = async (shedsToRecord: SelectedShed[], sessionId: string) => {
+    const records = shedsToRecord.map(shed => {
+      const calc = calculateAmounts(shed);
+      return {
+        id: Math.random().toString(36).substr(2, 9),
+        session_id: sessionId,
+        shed_name: shed.shed_name,
+        railway: shed.railway,
+        supplying_shed: shed.supplying_shed,
+        month: shed.for_month,
+        year: shed.for_year,
+        during_month: shed.during_month,
+        during_year: shed.during_year,
+        goods_litres: shed.goods_litres,
+        coach_litres: shed.coach_litres,
+        total_litres: shed.goods_litres + shed.coach_litres,
+        amount: calc?.total || 0,
+        is_power_car: shed.is_power_car,
+        pricing_period: shed.pricing_period
+      };
+    });
+
+    try {
+      await fetch('/api/analytics/batch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(records)
+      });
+    } catch (e) {
+      console.error('Record analytics error:', e);
+    }
+  };
 
   const parsePageRanges = (rangeStr: string, maxPages: number): number[] => {
     const pages = new Set<number>();
@@ -1275,74 +1272,72 @@ function MainApp() {
     }
   };
 
-  if (!isAuthenticated) return <Login />;
-
   return (
     <div className="min-h-screen bg-[#F8F9FA] text-[#1A1A1A] font-sans">
       {/* Header */}
-      <header className="bg-gray-50/80 backdrop-blur-md sticky top-0 z-50 border-b border-gray-200">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex justify-between items-center h-16">
-            <div className="flex items-center gap-3">
-              <div className="bg-[#0052CC] p-1.5 rounded-lg shadow-lg shadow-[#0052CC]/20">
-                <Calculator className="w-4 h-4 text-white" />
-              </div>
-              <h1 className="text-xs font-black tracking-tighter uppercase text-gray-900">
-                HSD Oil <span className="text-[#0052CC]">System</span>
-              </h1>
+      <header className="bg-white border-b border-[#E5E7EB] sticky top-0 z-30">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="bg-[#0052CC] p-2 rounded-lg">
+              <FileText className="text-white w-6 h-6" />
             </div>
-            
-            <div className="flex items-center gap-1 bg-gray-200/50 p-1 rounded-xl border border-gray-200/50">
-              <NavButton 
-                active={activeTab === 'generate'} 
-                onClick={() => setActiveTab('generate')} 
-                icon={<Plus className="w-3.5 h-3.5" />}
-                label="Generate"
-              />
-              <NavButton 
-                active={activeTab === 'worklogs'} 
-                onClick={() => setActiveTab('worklogs')} 
-                icon={<History className="w-3.5 h-3.5" />}
-                label="Logs"
-              />
-              {isAdmin && (
-                <>
-                  <NavButton 
-                    active={activeTab === 'prices'} 
-                    onClick={() => setActiveTab('prices')} 
-                    icon={<TrendingUp className="w-3.5 h-3.5" />}
-                    label="Prices"
-                  />
-                  <NavButton 
-                    active={activeTab === 'analytics'} 
-                    onClick={() => setActiveTab('analytics')} 
-                    icon={<BarChart3 className="w-3.5 h-3.5" />}
-                    label="Dashboard"
-                  />
-                  <NavButton 
-                    active={activeTab === 'admin'} 
-                    onClick={() => setActiveTab('admin')} 
-                    icon={<ShieldCheck className="w-3.5 h-3.5" />}
-                    label="Admin"
-                  />
-                </>
-              )}
-            </div>
-
-            <div className="flex items-center gap-3">
-              <div className="hidden md:flex flex-col items-end pr-4 border-r border-gray-200">
-                <span className="text-[9px] font-black text-gray-400 uppercase tracking-[0.2em] leading-none mb-1">{user?.role}</span>
-                <span className="text-[11px] font-bold text-gray-900 leading-none">{user?.username}</span>
-              </div>
-              <button
-                onClick={logout}
-                className="p-2 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-all"
-                title="Logout"
-              >
-                <LogIn className="w-4 h-4 rotate-180" />
-              </button>
+            <div>
+              <h1 className="text-lg font-bold tracking-tight">Western Railway</h1>
+              <p className="text-xs text-[#6B7280] font-medium uppercase tracking-wider">HSD Oil Cost Certificate System</p>
             </div>
           </div>
+          <nav className="flex gap-1 bg-[#F3F4F6] p-1 rounded-xl">
+            <button
+              onClick={() => setActiveTab('generate')}
+              className={cn(
+                "px-4 py-2 rounded-lg text-sm font-semibold transition-all duration-200 flex items-center gap-2",
+                activeTab === 'generate' ? "bg-white text-[#0052CC] shadow-sm" : "text-[#6B7280] hover:text-[#1A1A1A]"
+              )}
+            >
+              <Calculator className="w-4 h-4" />
+              Generate
+            </button>
+            <button
+              onClick={() => setActiveTab('prices')}
+              className={cn(
+                "px-4 py-2 rounded-lg text-sm font-semibold transition-all duration-200 flex items-center gap-2",
+                activeTab === 'prices' ? "bg-white text-[#0052CC] shadow-sm" : "text-[#6B7280] hover:text-[#1A1A1A]"
+              )}
+            >
+              <Settings className="w-4 h-4" />
+              Price Master
+            </button>
+            <button
+              onClick={() => setActiveTab('sheds')}
+              className={cn(
+                "px-4 py-2 rounded-lg text-sm font-semibold transition-all duration-200 flex items-center gap-2",
+                activeTab === 'sheds' ? "bg-white text-[#0052CC] shadow-sm" : "text-[#6B7280] hover:text-[#1A1A1A]"
+              )}
+            >
+              <Building2 className="w-4 h-4" />
+              Shed Master
+            </button>
+            <button
+              onClick={() => setActiveTab('worklogs')}
+              className={cn(
+                "px-4 py-2 rounded-lg text-sm font-semibold transition-all duration-200 flex items-center gap-2",
+                activeTab === 'worklogs' ? "bg-white text-[#0052CC] shadow-sm" : "text-[#6B7280] hover:text-[#1A1A1A]"
+              )}
+            >
+              <History className="w-4 h-4" />
+              Work Logs
+            </button>
+            <button
+              onClick={() => setActiveTab('analytics')}
+              className={cn(
+                "px-4 py-2 rounded-lg text-sm font-semibold transition-all duration-200 flex items-center gap-2",
+                activeTab === 'analytics' ? "bg-white text-[#0052CC] shadow-sm" : "text-[#6B7280] hover:text-[#1A1A1A]"
+              )}
+            >
+              <TrendingUp className="w-4 h-4" />
+              Analytics
+            </button>
+          </nav>
         </div>
       </header>
 
@@ -1388,77 +1383,13 @@ function MainApp() {
                   </button>
                   <button
                     onClick={() => handleSaveAction()}
-                    disabled={!canEdit}
-                    className="px-4 py-2 bg-[#0052CC] text-white rounded-xl text-xs font-bold shadow-lg shadow-[#0052CC]/10 hover:shadow-[#0052CC]/20 flex items-center gap-2 transition-all active:scale-95 disabled:opacity-50"
+                    className="px-4 py-2 bg-[#0052CC] text-white rounded-xl text-xs font-bold shadow-lg shadow-[#0052CC]/10 hover:shadow-[#0052CC]/20 flex items-center gap-2 transition-all active:scale-95"
                   >
                     <Save className="w-4 h-4" />
                     {currentSessionId ? 'Update Log' : 'Save Log'}
                   </button>
-                  {canEdit && (isManager || !isAdmin) && (
-                    <button
-                      onClick={async () => {
-                        if (!masterVoucherPdf) {
-                          alert('Please upload a Master Voucher PDF first in Step 2.');
-                          return;
-                        }
-                        if (confirm('Submit this session for approval? You will not be able to edit it afterward.')) {
-                          let sessionId = currentSessionId;
-                          if (!sessionId) {
-                            sessionId = await handleSaveAction(true); // silent save
-                          }
-                          if (sessionId) {
-                            try {
-                              const submitRes = await fetch(`/api/sessions/${sessionId}/submit`, {
-                                method: 'POST',
-                                headers: { 'Authorization': `Bearer ${token}` }
-                              });
-                              if (!submitRes.ok) throw new Error('Failed to submit session');
-
-                              // Refresh list of sessions of users
-                              const res = await fetch('/api/sessions', {
-                                headers: { 'Authorization': `Bearer ${token}` }
-                              });
-                              if (res.ok) {
-                                const data = await res.json();
-                                setSessions(data);
-                              }
-                              setSessionStatus('PENDING');
-                              setSuccessMessage('Session submitted for approval');
-                            } catch (e) {
-                              console.error('Submit session error:', e);
-                              alert('Error submitting session');
-                            }
-                          }
-                        }
-                      }}
-                      className="px-4 py-2 bg-amber-500 text-white rounded-xl text-xs font-bold shadow-lg shadow-amber-500/10 hover:shadow-amber-500/20 flex items-center gap-2 transition-all active:scale-95 cursor-pointer"
-                    >
-                      <CheckCircle2 className="w-4 h-4" />
-                      Submit
-                    </button>
-                  )}
                 </div>
               </div>
-
-              {/* Status Banner */}
-              {sessionStatus !== 'DRAFT' && (
-                <div className={cn(
-                  "p-4 rounded-2xl border flex items-center gap-4",
-                  isCompleted ? "bg-emerald-50 border-emerald-100 text-emerald-800" :
-                  isPending ? "bg-amber-50 border-amber-100 text-amber-800" :
-                  isRejected ? "bg-red-50 border-red-100 text-red-800" : "bg-gray-50 border-gray-100"
-                )}>
-                  {isCompleted ? <CheckCircle2 className="w-6 h-6" /> : <Clock className="w-6 h-6" />}
-                  <div>
-                    <h3 className="font-black text-sm uppercase tracking-wider">Session {sessionStatus}</h3>
-                    <p className="text-xs font-medium opacity-80">
-                      {isCompleted ? 'This session is approved and eligible for certificate generation.' :
-                       isPending ? 'Waiting for administrator review.' :
-                       isRejected ? 'This session was rejected. Please review and re-submit.' : ''}
-                    </p>
-                  </div>
-                </div>
-              )}
 
               {/* Step 4 Sections */}
               {/* Step 1: Global Config */}
@@ -1493,13 +1424,13 @@ function MainApp() {
                   <div className="space-y-2">
                     <label className="text-xs font-bold text-[#6B7280] uppercase ml-1">Supplying Shed</label>
                     <select
-                      disabled={isCompleted || isManager}
+                      disabled={isCompleted}
                       value={selectedSupplyingShed}
                       onChange={(e) => setSelectedSupplyingShed(e.target.value)}
                       className="w-full bg-[#F9FAFB] border border-[#E5E7EB] rounded-xl px-4 py-3 text-sm font-medium focus:ring-2 focus:ring-[#0052CC] focus:border-transparent transition-all outline-none"
                     >
-                      {supplyingShedMaster.map(s => (
-                        <option key={s.id} value={s.id}>{s.shed_name} ({s.railway})</option>
+                      {Array.from(new Set(priceMaster.map(p => p.supplying_shed))).map(s => (
+                        <option key={s} value={s}>{s}</option>
                       ))}
                     </select>
                   </div>
@@ -1588,11 +1519,10 @@ function MainApp() {
               </section>
 
               {/* Step 3: Add Sheds */}
-              {!isManager && (
-                <div className={cn(
-                  "grid gap-8 transition-all duration-500",
-                  masterVoucherPdf && showPdfPreview ? "grid-cols-1 lg:grid-cols-2" : "grid-cols-1"
-                )}>
+              <div className={cn(
+                "grid gap-8 transition-all duration-500",
+                masterVoucherPdf && showPdfPreview ? "grid-cols-1 lg:grid-cols-2" : "grid-cols-1"
+              )}>
                 {masterVoucherPdf && showPdfPreview && (
                   <motion.section 
                     initial={{ opacity: 0, x: -20 }}
@@ -1864,7 +1794,7 @@ function MainApp() {
                               <div className="space-y-1">
                                 <label className="text-[10px] font-bold text-[#6B7280] uppercase ml-1 block min-h-[12px]">Supplying Shed</label>
                                 <select
-                                  disabled={isCompleted || isManager}
+                                  disabled={isCompleted}
                                   value={shed.supplying_shed}
                                   onChange={(e) => updateSelectedShed(shed.instanceId, { supplying_shed: e.target.value })}
                                   className="w-full bg-[#F9FAFB] border border-[#E5E7EB] rounded-xl px-3 py-2 text-sm font-bold outline-none focus:ring-2 focus:ring-[#0052CC] h-[42px]"
@@ -1956,140 +1886,88 @@ function MainApp() {
                 </div>
               </section>
             </div>
-          )}
 
               {/* Step 4: Final Review & Generate */}
               <section className="bg-white rounded-2xl shadow-sm border border-[#E5E7EB] p-6 lg:p-8">
                 <div className="flex items-center gap-2 mb-8">
                   <CheckCircle2 className="text-[#0052CC] w-5 h-5" />
-                  <h2 className="text-sm font-bold uppercase tracking-[0.2em] text-[#6B7280]">Step 4: Save & Approve Workflow</h2>
+                  <h2 className="text-sm font-bold uppercase tracking-[0.2em] text-[#6B7280]">Step 4: Save & Generate Package</h2>
                 </div>
                 
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-                  {/* Left Column: Log Details & Status */}
-                  <div className="space-y-6">
-                    <div className="space-y-4 bg-gray-50/50 p-5 rounded-2xl border border-gray-100">
-                      <h3 className="text-xs font-black uppercase tracking-wider text-gray-500 mb-2">Log Identity</h3>
-                      <div className="space-y-2">
-                        <label className="text-[10px] font-bold text-[#6B7280] uppercase ml-1 block">Log Name</label>
-                        <input
-                          disabled={isCompleted && !isAdmin}
-                          placeholder="e.g. Feb 2026 Batch A"
-                          value={sessionName}
-                          onChange={(e) => setSessionName(e.target.value)}
-                          className="w-full bg-white border border-gray-200 rounded-xl px-4 py-3 text-sm font-bold focus:ring-2 focus:ring-[#0052CC] outline-none h-[46px] shadow-sm animate-none"
-                        />
-                      </div>
-                      <div className="space-y-2">
-                        <label className="text-[10px] font-bold text-[#6B7280] uppercase ml-1 block">Notes / Observations</label>
-                        <textarea
-                          disabled={isCompleted && !isAdmin}
-                          placeholder="Optional notes or observations..."
-                          value={sessionDesc}
-                          onChange={(e) => setSessionDesc(e.target.value)}
-                          className="w-full bg-white border border-gray-200 rounded-xl px-4 py-3 text-sm font-medium focus:ring-2 focus:ring-[#0052CC] outline-none h-[100px] resize-none shadow-sm"
-                        />
-                      </div>
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+                  {/* Log Identity */}
+                  <div className="space-y-4">
+                    <div className="space-y-1.5">
+                      <label className="text-[10px] font-bold text-[#6B7280] uppercase ml-1">Log Name</label>
+                      <input
+                        disabled={isCompleted}
+                        placeholder="e.g. Feb 2026 Batch A"
+                        value={sessionName}
+                        onChange={(e) => setSessionName(e.target.value)}
+                        className="w-full bg-[#F9FAFB] border border-[#E5E7EB] rounded-xl px-4 py-3 text-sm font-bold focus:ring-2 focus:ring-[#0052CC] outline-none h-[46px]"
+                      />
                     </div>
-
-                    {/* Status Badge */}
-                    <div className="bg-white border border-gray-100 rounded-2xl p-5 shadow-sm space-y-3">
-                      <h3 className="text-[10px] font-black text-[#6B7280] uppercase tracking-wider">Approval Status</h3>
-                      <div className={cn(
-                        "p-4 rounded-xl border flex items-center gap-3",
-                        isCompleted ? "bg-emerald-50 border-emerald-100 text-emerald-800" :
-                        isPending ? "bg-amber-50 border-amber-100 text-amber-800" :
-                        isRejected ? "bg-red-50 border-red-100 text-red-800" : "bg-gray-50 border-gray-100 text-gray-700"
-                      )}>
-                        {isCompleted ? <CheckCircle2 className="w-5 h-5 text-emerald-600" /> :
-                         isPending ? <Clock className="w-5 h-5 text-amber-600" /> :
-                         isRejected ? <AlertCircle className="w-5 h-5 text-red-600" /> :
-                         <FileText className="w-5 h-5 text-gray-600" />}
-                        <div>
-                          <p className="text-xs font-black uppercase tracking-wider">
-                            {isCompleted ? "Approved" : isPending ? "Awaiting Review" : isRejected ? "Revision Required" : "Draft (Working Copy)"}
-                          </p>
-                          <p className="text-[11px] opacity-85 font-medium mt-0.5">
-                            {isCompleted ? "This log is finalized. Output packages are available for download." :
-                             isPending ? "Submitted to Central Finance. Locked for editing." :
-                             isRejected ? "Rejected by Administrator. Please edit and click Submit." :
-                             "Draft state. Log can be saved locally and updated."}
-                          </p>
-                        </div>
-                      </div>
+                    <div className="space-y-1.5">
+                      <label className="text-[10px] font-bold text-[#6B7280] uppercase ml-1">Notes</label>
+                      <textarea
+                        disabled={isCompleted}
+                        placeholder="Optional notes..."
+                        value={sessionDesc}
+                        onChange={(e) => setSessionDesc(e.target.value)}
+                        className="w-full bg-[#F9FAFB] border border-[#E5E7EB] rounded-xl px-4 py-3 text-sm font-medium focus:ring-2 focus:ring-[#0052CC] outline-none h-[80px] resize-none"
+                      />
                     </div>
                   </div>
 
-                  {/* Right Column: Dynamic Actions Block */}
-                  <div className="space-y-6 flex flex-col justify-between">
-                    <div className="bg-white border border-gray-100 rounded-2xl p-5 shadow-sm space-y-6 flex-1 flex flex-col justify-between">
-                      <div className="space-y-2">
-                        <h3 className="text-xs font-black uppercase tracking-wider text-gray-500">Actions & Deliverables</h3>
-                        <p className="text-xs text-gray-400 font-medium">Use the operations below to checkpoint and serialize records.</p>
-                      </div>
-
-                      <div className="space-y-4">
-                        {/* Save Button Row */}
-                        <div className="space-y-2">
-                          <button
-                            onClick={() => handleSaveAction()}
-                            disabled={isSavingSession || (isCompleted && !isAdmin)}
-                            className="w-full bg-white border border-[#0052CC] text-[#0052CC] disabled:opacity-50 disabled:cursor-not-allowed py-3.5 px-4 rounded-xl font-bold text-xs hover:bg-[#0052CC]/5 transition-all flex items-center justify-center gap-2 active:scale-95 shadow-sm uppercase tracking-wider"
-                          >
-                            {isSavingSession ? <div className="w-4 h-4 border-2 border-[#0052CC]/20 border-t-[#0052CC] rounded-full animate-spin" /> : <Save className="w-4 h-4" />}
-                            {(isCompleted && !isAdmin) ? 'Log finalized & locked' : (currentSessionId ? 'Update Log Progress' : 'Save Permanent Block')}
-                          </button>
-                        </div>
-
-                        {/* Certificates or Manager Info Row */}
-                        {!isManager ? (
-                          <div className="grid grid-cols-2 gap-4">
-                            <button
-                              disabled={selectedSheds.length === 0 || selectedSheds.some(s => !calculateAmounts(s)) || isGenerating || (!isCompleted && !isAdmin)}
-                              onClick={generateCertificatesOnlyZip}
-                              className={cn(
-                                "py-3 px-4 rounded-xl font-bold text-xs shadow-lg transition-all flex items-center justify-center gap-2.5 active:scale-[0.98] uppercase tracking-wider",
-                                (isCompleted || isAdmin) ? "bg-[#0052CC] text-white shadow-[#0052CC]/10 hover:shadow-[#0052CC]/20 cursor-pointer" : "bg-gray-100 text-gray-400 cursor-not-allowed shadow-none"
-                              )}
-                            >
-                              {isGenerating ? <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" /> : <Download className="w-4 h-4" />}
-                              <span className="text-left leading-tight py-0.5">Certificates <span className="text-[9px] opacity-70 block">ZIP ONLY</span></span>
-                            </button>
-
-                            <button
-                              disabled={selectedSheds.length === 0 || selectedSheds.some(s => !calculateAmounts(s)) || isGenerating || (!isCompleted && !isAdmin)}
-                              onClick={generateCertificatesZip}
-                              className={cn(
-                                "py-3 px-4 rounded-xl font-bold text-xs shadow-lg transition-all flex items-center justify-center gap-2.5 active:scale-[0.98] uppercase tracking-wider",
-                                (isCompleted || isAdmin) ? "bg-indigo-600 text-white shadow-indigo-100 hover:shadow-indigo-200 cursor-pointer" : "bg-gray-100 text-gray-400 cursor-not-allowed shadow-none"
-                              )}
-                            >
-                              {isGenerating ? <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" /> : <FileText className="w-4 h-4" />}
-                              <span className="text-left leading-tight py-0.5">Full Package <span className="text-[9px] opacity-70 block">COMPREHENSIVE</span></span>
-                            </button>
-                          </div>
-                        ) : (
-                          <div className="bg-indigo-50/50 border border-indigo-100/60 p-4 rounded-xl space-y-2">
-                            <div className="flex items-start gap-2.5">
-                              <ShieldCheck className="w-4.5 h-4.5 text-indigo-600 mt-0.5 animate-none" />
-                              <div>
-                                <h4 className="text-xs font-black text-indigo-950 uppercase tracking-wider">Shed Manager Clearance</h4>
-                                <p className="text-[11px] text-indigo-800 font-medium leading-relaxed mt-1">
-                                  Your vouchers are fully prepared. Please save your progress and click the <strong className="font-extrabold text-indigo-950">"Submit"</strong> button at the top header to send the package for central administration approval.
-                                </p>
-                              </div>
-                            </div>
-                          </div>
+                  {/* Status & Save */}
+                  <div className="space-y-4 flex flex-col justify-between">
+                    <div className="space-y-1.5">
+                      <label className="text-[10px] font-bold text-[#6B7280] uppercase ml-1">Processing Status</label>
+                      <select
+                        disabled={isCompleted}
+                        value={sessionStatus}
+                        onChange={(e) => setSessionStatus(e.target.value as any)}
+                        className={cn(
+                          "w-full border rounded-xl px-4 py-3 text-sm font-bold outline-none h-[46px] transition-all",
+                          sessionStatus === 'completed' ? "bg-emerald-50 border-emerald-200 text-emerald-700" : "bg-[#F9FAFB] border-[#E5E7EB] text-[#1A1A1A]"
                         )}
-
-                        {!isCompleted && !isAdmin && (
-                          <p className="text-[10px] text-amber-600 font-bold text-center flex items-center justify-center gap-1.5 bg-amber-50 py-2.5 rounded-xl border border-amber-100">
-                            <AlertCircle className="w-3.5 h-3.5" />
-                            Awaiting Central Finance Approval to finalize outputs
-                          </p>
-                        )}
-                      </div>
+                      >
+                        <option value="in_progress">In Progress (Draft)</option>
+                        <option value="completed">Completed (Finalized)</option>
+                      </select>
+                      <p className="text-[10px] text-[#6B7280] mt-1 italic">
+                        {sessionStatus === 'completed' ? 'Finalizing will lock the record and sync analytics.' : 'In Progress allows further edits.'}
+                      </p>
                     </div>
+
+                    <button
+                      onClick={() => handleSaveAction()}
+                      disabled={isSavingSession || isCompleted}
+                      className="w-full bg-white border border-[#0052CC] text-[#0052CC] disabled:opacity-50 disabled:cursor-not-allowed p-4 rounded-xl font-bold text-sm hover:bg-[#0052CC]/5 transition-all flex items-center justify-center gap-2 active:scale-95"
+                    >
+                      {isSavingSession ? <div className="w-4 h-4 border-2 border-[#0052CC]/20 border-t-[#0052CC] rounded-full animate-spin" /> : <Save className="w-4 h-4" />}
+                      {isCompleted ? 'Log finalized' : (currentSessionId ? 'Update Record' : 'Save Permanent Log')}
+                    </button>
+                  </div>
+
+                  {/* Download Actions */}
+                  <div className="flex flex-col gap-3">
+                    <button
+                      disabled={selectedSheds.length === 0 || selectedSheds.some(s => !calculateAmounts(s)) || isGenerating}
+                      onClick={generateCertificatesOnlyZip}
+                      className="flex-1 bg-[#0052CC] text-white disabled:bg-[#E5E7EB] p-4 rounded-2xl font-bold text-sm shadow-lg shadow-[#0052CC]/10 hover:shadow-[#0052CC]/20 transition-all flex items-center justify-center gap-3 active:scale-[0.98]"
+                    >
+                      {isGenerating ? <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" /> : <Download className="w-5 h-5" />}
+                      Download certificates (zip)
+                    </button>
+                    <button
+                      disabled={selectedSheds.length === 0 || selectedSheds.some(s => !calculateAmounts(s)) || isGenerating}
+                      onClick={generateCertificatesZip}
+                      className="bg-[#0052CC]/5 border border-[#0052CC]/20 text-[#0052CC] disabled:opacity-50 p-3 rounded-xl font-bold text-xs hover:bg-[#0052CC]/10 transition-all flex items-center justify-center gap-2"
+                    >
+                      <FileText className="w-4 h-4" />
+                      Download Full Package (ZIP)
+                    </button>
                   </div>
                 </div>
               </section>
@@ -2125,19 +2003,6 @@ function MainApp() {
                 <p className="text-sm text-[#6B7280] font-medium">Visualizing HSD oil usage patterns, costs, and trends across all railway sheds.</p>
               </div>
               <Analytics records={consumptionRecords} />
-            </motion.div>
-          ) : activeTab === 'admin' && isAdmin ? (
-            <motion.div
-              key="admin"
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -10 }}
-            >
-              <div className="mb-8">
-                <h2 className="text-2xl font-black text-gray-900">Administration Portal</h2>
-                <p className="text-sm text-gray-500 font-medium">Manage system users, shed mappings, and supervise session approvals.</p>
-              </div>
-              <AdminPortal />
             </motion.div>
           ) : activeTab === 'prices' ? (
             <motion.div
@@ -2180,9 +2045,8 @@ function MainApp() {
                       onChange={(e) => setNewPriceEntry({ ...newPriceEntry, supplying_shed: e.target.value })}
                       className="w-full bg-[#F9FAFB] border border-[#E5E7EB] rounded-lg px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-[#0052CC]"
                     >
-                      {supplyingShedMaster.map(s => (
-                        <option key={s.id} value={s.id}>{s.shed_name}</option>
-                      ))}
+                      <option value="HXP">HXP</option>
+                      <option value="WKR">WKR</option>
                     </select>
                   </div>
                   <div className="flex items-end">
@@ -2458,7 +2322,108 @@ function MainApp() {
                 </div>
               </div>
             </motion.div>
-          ) : null}
+          ) : (
+            <motion.div
+              key="sheds"
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -10 }}
+              className="space-y-6"
+            >
+              <div className="bg-white rounded-2xl shadow-sm border border-[#E5E7EB] p-6">
+                <div className="flex items-center gap-2 mb-6">
+                  <Building2 className="text-[#0052CC] w-5 h-5" />
+                  <h2 className="text-sm font-bold uppercase tracking-widest text-[#6B7280]">Add New Shed to Master</h2>
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-bold text-[#6B7280] uppercase">Shed Name</label>
+                    <input
+                      type="text"
+                      value={newShed.shed_name || ''}
+                      onChange={(e) => setNewShed({ ...newShed, shed_name: e.target.value.toUpperCase() })}
+                      className="w-full bg-[#F9FAFB] border border-[#E5E7EB] rounded-lg px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-[#0052CC]"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-bold text-[#6B7280] uppercase">Railway</label>
+                    <input
+                      type="text"
+                      value={newShed.railway || ''}
+                      onChange={(e) => setNewShed({ ...newShed, railway: e.target.value.toUpperCase() })}
+                      className="w-full bg-[#F9FAFB] border border-[#E5E7EB] rounded-lg px-3 py-2 text-sm outline-none focus:ring-1 focus:ring-[#0052CC]"
+                    />
+                  </div>
+                  <div className="flex items-end md:col-span-2">
+                    <button
+                      onClick={async () => {
+                        if (newShed.shed_name && newShed.railway) {
+                          const shed: ShedMasterEntry = { 
+                            ...newShed, 
+                            id: `shed-${Date.now()}-${Math.random().toString(36).substr(2, 5)}` 
+                          } as ShedMasterEntry;
+                          try {
+                            await fetch('/api/sheds', {
+                              method: 'POST',
+                              headers: { 'Content-Type': 'application/json' },
+                              body: JSON.stringify(shed)
+                            });
+                            setShedMaster([...shedMaster, shed]);
+                            setNewShed({ railway: 'WR' });
+                          } catch (error) {
+                            console.error('Error adding shed:', error);
+                          }
+                        }
+                      }}
+                      className="w-full bg-[#0052CC] text-white rounded-lg py-2 text-sm font-bold hover:bg-[#0747A6] transition-colors"
+                    >
+                      Add to Master
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <div className="bg-white rounded-2xl shadow-sm border border-[#E5E7EB] overflow-hidden">
+                <div className="p-6 border-b border-[#E5E7EB]">
+                  <h2 className="text-sm font-bold uppercase tracking-widest text-[#6B7280]">Persistent Shed Master List</h2>
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm text-left">
+                    <thead className="bg-[#F9FAFB] text-[#6B7280] text-[10px] font-bold uppercase tracking-wider">
+                      <tr>
+                        <th className="px-6 py-4 border-b border-[#E5E7EB]">Shed Name</th>
+                        <th className="px-6 py-4 border-b border-[#E5E7EB]">Railway</th>
+                        <th className="px-6 py-4 border-b border-[#E5E7EB] text-right">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-[#E5E7EB]">
+                      {shedMaster.map((shed) => (
+                        <tr key={shed.id} className="hover:bg-[#F9FAFB] transition-colors">
+                          <td className="px-6 py-4 font-bold">{shed.shed_name}</td>
+                          <td className="px-6 py-4">{shed.railway}</td>
+                          <td className="px-6 py-4 text-right">
+                            <button
+                              onClick={async () => {
+                                try {
+                                  await fetch(`/api/sheds/${shed.id}`, { method: 'DELETE' });
+                                  setShedMaster(shedMaster.filter(s => s.id !== shed.id));
+                                } catch (error) {
+                                  console.error('Error deleting shed:', error);
+                                }
+                              }}
+                              className="p-2 text-[#9CA3AF] hover:text-red-600 transition-colors"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </motion.div>
+          )}
         </AnimatePresence>
       </main>
 
