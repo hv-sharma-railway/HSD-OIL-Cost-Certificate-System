@@ -46,9 +46,9 @@ Automated HSD Oil Cost Certificate Generation System for **Western Railway, Rajk
 ## 🚀 Overview
 The **HSD Oil Cost Certificate System** is a full-stack automated solution custom-built to modernize auditing, pricing verification, and cost allocation workflows within the **Rajkot Division, Western Railway Finance Office**. 
 
-High Speed Diesel (HSD) is one of the most significant operating expenses across railway divisions. To comply with rigorous financial oversight standards, divisional auditors must cross-verify literal fuel draws against fluctuating pricing metrics issued by supplying oil depots, calculate corresponding tax allocations (Excise, VAT, Overhead), merge supporting fuel vouchers, and produce audited cost certificates. 
+High Speed Diesel (HSD) is one of the most significant operating expenses across railway divisions. To comply with rigorous financial oversight standards, the user must cross-verify literal fuel draws against fluctuating pricing metrics issued by supplying oil depots, calculate corresponding tax allocations (Excise, VAT, Overhead), merge supporting fuel vouchers, and produce audited cost certificates. 
 
-Historically, this has been an error-prone, manually compiled process. This system introduces a single cohesive dashboard where Finance Officers can manage a structured price master list, compile individual consuming shed records into isolated billing sessions, programmatically perform split-tax calculations, dynamically stitch underlying PDF vouchers, and generate audit-compliant ZIP archives of fully compiled, certified documents.
+Historically, this has been an error-prone, manually compiled process. This system introduces a single cohesive dashboard where the user can manage a structured price master list, compile individual consuming shed records into isolated billing sessions, programmatically perform split-tax calculations, dynamically stitch underlying PDF vouchers, and generate audit-compliant ZIP archives of fully compiled, certified documents.
 
 ---
 
@@ -75,13 +75,20 @@ Open your browser and navigate to `http://localhost:3000`.
 
 ## ✨ Key Features
 
-- **Automated PDF Compilation Engine**: Programmatically builds professional cost certificates with high-contrast vector borders, aligned tabular calculations, automated word-wrapping, and standardized Western Railway signature panels.
-- **Voucher Stitching & Merging Layer**: Integrates client-side and server-side PDF manipulation vectors using `pdf-lib` and `pdfjs-dist` to dynamically prepend or append supplementary receipt documents on-the-fly.
-- **Bulk Zip Generation**: Packages multi-shed, multi-record certificates into a structured, chronologically flat or hierarchical ZIP file using `jszip`, reducing auditor desk processing by hours.
-- **Dynamic Session-State Management**: Prevents state loss during heavy sessions by serializing incomplete audit workflows into a self-contained local JSON scheme and persisting them to the database.
-- **Shed & Price Masters**: Centralized repositories for managing consuming locomotive sheds, designated zonal railway affiliations, and supplying diesel depots (such as HXP, WKR) along with their pricing periods.
-- **Power Car Allocation Auto-Splits**: Automates allocation code splitting for passenger power engines, routing expenses to exact budgetary headings (Base, Excise, VAT, and Overheads) on a pro-rata basis.
-- **Built-in Analytics Desk**: Provides interactive, visually detailed Recharts diagrams tracking division fuel consumption volumes, accumulated tax expenses, and historical diesel price waves.
+- **Automatic Cost Certificate Creation**  
+  Generates professional cost certificates automatically with proper formatting, calculations, and signature sections, saving significant manual effort.
+- **Receipt and Voucher Attachment**  
+  Allows supporting receipts and vouchers to be easily attached to certificates, creating a complete document package in one place.
+- **Bulk Document Download**  
+  Creates multiple certificates at once and packages them into organized ZIP files, making audits and record sharing much faster.
+- **Save and Resume Work**  
+  Automatically saves work in progress so users can continue from where they left off without losing data.
+- **Shed and Fuel Price Management**  
+  Maintains a central database of locomotive sheds, railway zones, diesel depots, and fuel rates for different time periods.
+- **Automatic Expense Distribution**  
+  Calculates and distributes fuel costs into the correct accounting categories, reducing manual calculations and errors.
+- **Fuel Usage Dashboard and Reports**  
+  Provides easy-to-understand charts and reports showing fuel consumption, tax expenses, and diesel price trends over time.
 
 ---
 
@@ -298,7 +305,7 @@ During computation, financial records are categorized and mapped directly to Wes
 ### Audit Reference Scenario
 
 Consider a standard certification case:
-- **Consuming Shed**: `RAJKOT` (Railway: `WR`)
+- **Consuming Shed**: `PUNE` (Railway: `CR`)
 - **Billing Period**: `FEB 2026`
 - **Supplying Depot**: `WKR`
 - **Litre Allocations**: 10,000 Litres (Coach Fuel volume)
@@ -419,19 +426,20 @@ The application UI is highly consolidated into three primary workspace views:
 ---
 
 ## 👥 User Roles & Permissions
-Access to local application components is designed around key roles in the division context:
 
-### 1. Divisional Finance Officer (DFO) / Auditor
-- **Access Level**: Full Administration
-- **Capabilities**: Clear or create active processing sessions, modify pricing history, upload depot tax notices, adjust master consuming shed registers, override calculated values, and export output bundles.
+This application does not implement user authentication or role-based access control. All users have access to the same features and functionality.
 
-### 2. Senior Section Officer (SSO) / Account Assistant
-- **Access Level**: Standard Read/Write Workspace
-- **Capabilities**: Load active monthly workspaces, fill goods/coaching diesel draws, upload local station fuel receipts, review calculation summaries, and generate test PDFs to verify numerical compliance.
+### Available Features
+- Create and manage audit sessions.
+- Maintain Shed Master and Fuel Price Master records.
+- Upload vouchers, receipts, and supporting documents.
+- Generate cost certificates and ZIP archives.
+- View analytics and reports.
+- Save and resume work-in-progress sessions.
+- Access historical records and archived sessions.
+- Edit or delete records as required.
 
-### 3. Railway Audit & Divisional Accounts Inspector
-- **Access Level**: Read-Only Inspection Portal
-- **Capabilities**: View archived monthly sessions, inspect past records via the integrated database viewer, query transaction histories, and view dashboard analytics.
+> **Note:** The system is designed for internal departmental use and currently provides the same access to all users.
 
 ---
 
@@ -651,9 +659,8 @@ gcloud run deploy hsd-oil-system \
 Planned additions for upcoming system milestones:
 
 - **AI-Powered Discrepancy Auditing**: Integrate the configured Gemini API to cross-analyze uploaded voucher PDFs against entered manual calculations, automatically highlighting data discrepancies.
-- **Active Directory / HRMS Single Sign-On (SSO)**: Connect the system directly to the Indian Railways unified Single-Sign-On system to streamline divisional logins.
-- **Automated Pricing Sync**: Configure service fetchers to automatically scrape and import authorized diesel price notifications directly from major oil corporations (IOCL, BPCL, HPCL) daily.
-- **Audit Logging**: Implement a tamper-proof dashboard audit log to track edits to historic sessions.
+
+- **Automatic Data Extraction from Voucher PDFs**: Extract key information such as voucher numbers, dates, depot details, fuel quantities, and amounts directly from uploaded PDF documents, reducing manual data entry and minimizing errors.
 
 ---
 
@@ -704,11 +711,9 @@ This application, its source blueprints, data stores, and calculated schema are 
 
 For technical support, reporting bugs, or coordinate expansion updates, contact the helpdesk below:
 
-- **Supervision Department**: IT Cell, Rajkot Division Finance Office, Western Railway.
+- **Supervision Department**: IT Cell, Accounts Office, Rajkot Division, Western Railway.
 - **System Administration Desk**: `rjtwritcell@gmail.com`
-- **Internal Coordination Helpline**: RailNet - `095-54522` / `095-54524` (Rajkot Division Finance Section)
-- **Local Address**: Division Railway Manager (DRM) Office, Kothi Compound, Rajkot, Gujarat, India - 360001
-- **Application URL**: `https://ais-dev-4a2xxq2o76uecfmnbaiaid-416712913801.asia-southeast1.run.app`
+- **Local Address**: Office of Sr. DFM - RJT, Kothi Compound, Rajkot, Gujarat, India - 360001
 
 ---
 <p align="center">
