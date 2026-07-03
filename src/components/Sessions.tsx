@@ -21,9 +21,10 @@ interface WorkLogsProps {
   onLoad: (session: Session) => void;
   onDelete: (id: string) => void;
   onComplete: (id: string) => void;
+  priceMaster: any[];
 }
 
-export const Sessions: React.FC<WorkLogsProps> = ({ sessions, currentSessionId, onLoad, onDelete, onComplete }) => {
+export const Sessions: React.FC<WorkLogsProps> = ({ sessions, currentSessionId, onLoad, onDelete, onComplete, priceMaster }) => {
   if (sessions.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center py-20 text-[#6B7280]">
@@ -33,6 +34,52 @@ export const Sessions: React.FC<WorkLogsProps> = ({ sessions, currentSessionId, 
       </div>
     );
   }
+
+  const getPriceForShed = (supplyingShed: string, period: string, month: string, year: string, prices: any[]) => {
+    const entry = prices.find(p => 
+      p.supplying_shed === supplyingShed && 
+      p.month === month && 
+      p.year === year
+    );
+    if (!entry) return null;
+    return entry.periods[period as keyof typeof entry.periods];
+  };
+
+  const calculateAmounts = (shed: any, prices: any[]) => {
+    const price = getPriceForShed(shed.supplying_shed, shed.pricing_period, shed.during_month, shed.during_year, prices);
+    if (!price) return null;
+
+    const totalLitres = shed.goods_litres + shed.coach_litres;
+    const klrs = totalLitres / 1000;
+
+    const primeCost = price.base_price * klrs;
+    const excise = price.excise * klrs;
+    const vat = price.vat * klrs;
+    const overhead = price.overhead * klrs;
+    const total = primeCost + excise + vat + overhead;
+
+    return {
+      primeCost,
+      excise,
+      vat,
+      overhead,
+      total,
+      coachPrimeCost: price.base_price * (shed.coach_litres / 1000),
+      goodsPrimeCost: price.base_price * (shed.goods_litres / 1000)
+    };
+  };
+
+  const getSessionTotal = (session: Session, prices: any[]) => {
+    const sheds = session.state?.selectedSheds || [];
+    return sheds.reduce((sum, s) => {
+      const calc = calculateAmounts(s, prices);
+      if (!calc) return sum;
+      const roundedShedTotal = s.is_power_car
+        ? Math.round(calc.primeCost) + Math.round(calc.excise) + Math.round(calc.vat) + Math.round(calc.overhead)
+        : Math.round(calc.coachPrimeCost) + Math.round(calc.goodsPrimeCost) + Math.round(calc.excise) + Math.round(calc.vat) + Math.round(calc.overhead);
+      return sum + roundedShedTotal;
+    }, 0);
+  };
 
   const formatDate = (dateStr: string) => {
     const date = new Date(dateStr);
@@ -134,6 +181,12 @@ export const Sessions: React.FC<WorkLogsProps> = ({ sessions, currentSessionId, 
                 <div className="bg-white border border-gray-100 rounded-2xl p-3.5 shadow-sm">
                   <p className="text-[10px] font-black text-[#9CA3AF] uppercase tracking-wider mb-1.5">Inventory</p>
                   <p className="text-xs font-bold text-[#1A1A1A]">{session.state.selectedSheds.length} Sheds Added</p>
+                </div>
+                <div className="col-span-2 bg-[#0052CC]/5 border border-[#0052CC]/10 rounded-2xl px-4 py-3 flex justify-between items-center shadow-sm">
+                  <span className="text-[10px] font-black text-[#0052CC] uppercase tracking-wider">Consuming Sheds Cost</span>
+                  <span className="text-sm font-black text-[#0052CC]">
+                    ₹{getSessionTotal(session, priceMaster).toLocaleString('en-IN')}
+                  </span>
                 </div>
               </div>
 

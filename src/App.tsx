@@ -21,7 +21,8 @@ import {
   History,
   TrendingUp,
   BarChart3,
-  Save
+  Save,
+  ShieldCheck
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { jsPDF } from 'jspdf';
@@ -33,6 +34,7 @@ import * as pdfjsLib from 'pdfjs-dist';
 // New Components
 import { Analytics } from './components/Analytics';
 import { Sessions as WorkLogs } from './components/Sessions';
+import { AuditTrail, AuditLog } from './components/AuditTrail';
 
 // Set worker source for pdfjs-dist - Using unpkg for better reliability
 const PDF_WORKER_URL = `https://unpkg.com/pdfjs-dist@${pdfjsLib.version}/build/pdf.worker.min.mjs`;
@@ -176,7 +178,7 @@ import {
 } from './types';
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<'generate' | 'prices' | 'sheds' | 'worklogs' | 'analytics'>('generate');
+  const [activeTab, setActiveTab] = useState<'generate' | 'prices' | 'sheds' | 'worklogs' | 'analytics' | 'audit_logs'>('generate');
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [selectedMonth, setSelectedMonth] = useState(() => {
     const d = new Date();
@@ -208,8 +210,43 @@ export default function App() {
   const [sessionName, setSessionName] = useState('');
   const [sessionDesc, setSessionDesc] = useState('');
   const [sessionStatus, setSessionStatus] = useState<'in_progress' | 'completed'>('in_progress');
-  const isCompleted = sessionStatus === 'completed';
+  const isCompleted = false; // Allow editing completed/archived sessions as per user request
+  const isSessionFinalized = sessionStatus === 'completed';
   const [isSavingSession, setIsSavingSession] = useState(false);
+
+  const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
+  const userEmail = 'rjtwritcell@gmail.com';
+
+  const fetchAuditLogs = async () => {
+    try {
+      const res = await fetch('/api/audit-logs');
+      const data = await res.json();
+      setAuditLogs(data);
+    } catch (e) {
+      console.error('Error fetching audit logs:', e);
+    }
+  };
+
+  const logAuditAction = async (actionType: string, details: string, sessionId?: string | null, sessionNameVal?: string | null) => {
+    try {
+      const logPayload = {
+        id: Math.random().toString(36).substr(2, 9),
+        session_id: sessionId || currentSessionId || null,
+        session_name: sessionNameVal || sessionName || (sessionId ? sessions.find(s => s.id === sessionId)?.name : null) || (currentSessionId ? sessions.find(s => s.id === currentSessionId)?.name : null) || null,
+        user_email: userEmail,
+        action_type: actionType,
+        details
+      };
+      await fetch('/api/audit-logs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(logPayload)
+      });
+      fetchAuditLogs();
+    } catch (e) {
+      console.error('Error logging audit action:', e);
+    }
+  };
 
   useEffect(() => {
     if (successMessage) {
@@ -255,6 +292,7 @@ export default function App() {
         setPriceMaster(prices.length > 0 ? prices : INITIAL_PRICE_MASTER);
         setSessions(loadedSessions);
         setConsumptionRecords(loadedAnalytics);
+        await fetchAuditLogs();
 
         // If initial data was empty, populate DB with defaults
         if (sheds.length === 0) {
@@ -445,6 +483,7 @@ export default function App() {
         body: JSON.stringify(newEntry)
       });
       setPriceMaster([...priceMaster, newEntry]);
+      await logAuditAction('PRICE_ADD', `Added price entry for ${newEntry.supplying_shed} - ${newEntry.month} ${newEntry.year}`);
     } catch (error) {
       console.error('Error adding price:', error);
     }
@@ -456,16 +495,16 @@ export default function App() {
 
     let updatedPeriods = { ...entry.periods, [period]: data };
 
-    // Auto-calculate average if p1 or p2 is updated
+    // Auto-calculate average if p1 or p2 is updated - round off average to whole integer
     if (period === 'p1' || period === 'p2') {
       const p1 = updatedPeriods['p1'];
       const p2 = updatedPeriods['p2'];
       updatedPeriods['average'] = {
         ...updatedPeriods['average'],
-        base_price: Number(((p1.base_price + p2.base_price) / 2).toFixed(2)),
-        excise: Number(((p1.excise + p2.excise) / 2).toFixed(2)),
-        vat: Number(((p1.vat + p2.vat) / 2).toFixed(2)),
-        overhead: Number(((p1.overhead + p2.overhead) / 2).toFixed(2)),
+        base_price: Math.round((p1.base_price + p2.base_price) / 2),
+        excise: Math.round((p1.excise + p2.excise) / 2),
+        vat: Math.round((p1.vat + p2.vat) / 2),
+        overhead: Math.round((p1.overhead + p2.overhead) / 2),
       };
     }
 
@@ -481,6 +520,10 @@ export default function App() {
         body: JSON.stringify(updatedEntry)
       });
       setPriceMaster(prev => prev.map(p => p.id === entryId ? updatedEntry : p));
+      await logAuditAction(
+        'PRICE_UPDATE', 
+        `Updated price rates for ${entry.supplying_shed} - ${entry.month} ${entry.year} (${period} period)\nRates: Base: ${data.base_price}, Excise: ${data.excise}, VAT: ${data.vat}, Overheads: ${data.overhead}`
+      );
     } catch (error) {
       console.error('Error updating price:', error);
     }
@@ -505,15 +548,20 @@ export default function App() {
         body: JSON.stringify(updatedEntry)
       });
       setPriceMaster(prev => prev.map(p => p.id === entryId ? updatedEntry : p));
+      await logAuditAction('PRICE_UPDATE', `Updated period label of ${entry.supplying_shed} - ${entry.month} ${entry.year}: ${periodKey} -> "${newName}"`);
     } catch (error) {
       console.error('Error updating period name:', error);
     }
   };
 
   const deletePriceEntry = async (id: string) => {
+    const entry = priceMaster.find(p => p.id === id);
     try {
       await fetch(`/api/prices/${id}`, { method: 'DELETE' });
       setPriceMaster(prev => prev.filter(p => p.id !== id));
+      if (entry) {
+        await logAuditAction('PRICE_DELETE', `Deleted entire price entry for ${entry.supplying_shed} - ${entry.month} ${entry.year}`);
+      }
     } catch (error) {
       console.error('Error deleting price:', error);
     }
@@ -553,7 +601,10 @@ export default function App() {
         doc.setFontSize(11);
         doc.setFont('times', 'normal');
         
-        const totalAmount = Math.round(calc.total).toLocaleString('en-IN');
+        const calculatedTotalAmount = shed.is_power_car
+          ? Math.round(calc.primeCost) + Math.round(calc.excise) + Math.round(calc.vat) + Math.round(calc.overhead)
+          : Math.round(calc.coachPrimeCost) + Math.round(calc.goodsPrimeCost) + Math.round(calc.excise) + Math.round(calc.vat) + Math.round(calc.overhead);
+        const totalAmount = calculatedTotalAmount.toLocaleString('en-IN');
         const totalLitres = (shed.goods_litres + shed.coach_litres).toLocaleString('en-IN');
         
         const getFullMonth = (m: string) => {
@@ -718,7 +769,7 @@ export default function App() {
           tableBody.push(['Sales Tax/Add.Tax', Math.round(calc.price.vat).toLocaleString('en-IN'), '10023238', Math.round(calc.vat).toLocaleString('en-IN')]);
           tableBody.push(['Other Taxes & Levies', Math.round(calc.price.overhead).toLocaleString('en-IN'), '10022199', Math.round(calc.overhead).toLocaleString('en-IN')]);
         }
-        tableBody.push([{ content: 'TOTAL', styles: { fontStyle: 'bold' } }, Math.round(calc.price.base_price + calc.price.excise + calc.price.vat + calc.price.overhead).toLocaleString('en-IN'), '', { content: Math.round(calc.total).toLocaleString('en-IN'), styles: { fontStyle: 'bold' } }]);
+        tableBody.push([{ content: 'TOTAL', styles: { fontStyle: 'bold' } }, Math.round(calc.price.base_price + calc.price.excise + calc.price.vat + calc.price.overhead).toLocaleString('en-IN'), '', { content: calculatedTotalAmount.toLocaleString('en-IN'), styles: { fontStyle: 'bold' } }]);
 
         autoTable(doc, {
           startY: lastY + 85,
@@ -736,7 +787,7 @@ export default function App() {
         });
 
         const finalPdfBytes = doc.output('arraybuffer');
-        const fileName = `${shed.shed_name}_${shed.railway}_RS_${Math.round(calc.total)}_${shed.coach_litres + (shed.is_power_car ? 0 : shed.goods_litres)}_LITRES_${shed.during_month}${shed.during_year}.pdf`;
+        const fileName = `${shed.shed_name}_${shed.railway}_RS_${calculatedTotalAmount}_${shed.coach_litres + (shed.is_power_car ? 0 : shed.goods_litres)}_LITRES_${shed.during_month}${shed.during_year}.pdf`;
         zip.file(fileName, finalPdfBytes);
       }
 
@@ -799,6 +850,14 @@ export default function App() {
       setCurrentSessionId(sessionId);
       if (!sessionName) setSessionName(finalName);
       if (!silent) setSuccessMessage(currentSessionId ? 'Work log updated' : 'Work log saved');
+
+      const isNew = !currentSessionId;
+      const isSavingCompleted = sessionStatus === 'completed';
+      const logDetails = isNew 
+        ? `Created permanent log '${finalName}' (Sheds: ${selectedSheds.map(s => s.shed_name).join(', ') || 'None'})` 
+        : `Updated ${isSavingCompleted ? 'completed (archived)' : 'draft'} log '${finalName}' (Sheds: ${selectedSheds.map(s => s.shed_name).join(', ') || 'None'})`;
+      await logAuditAction(isNew ? 'CREATE' : 'UPDATE', logDetails, sessionId, finalName);
+
       return sessionId;
     } catch (e) {
       console.error('Save session error:', e);
@@ -825,6 +884,7 @@ export default function App() {
       
       setSessions(prev => prev.map(s => s.id === id ? { ...s, is_completed: true } : s));
       setSuccessMessage('Work log marked as completed');
+      await logAuditAction('COMPLETE', `Finalized and completed work log '${logToComplete.name}' and synced its consuming sheds data to the dashboard`, id, logToComplete.name);
       
       // Refresh analytics
       const analyticsRes = await fetch('/api/analytics');
@@ -842,6 +902,9 @@ export default function App() {
   };
 
   const deleteSession = async (id: string) => {
+    const logToDelete = sessions.find(s => s.id === id);
+    if (!logToDelete) return;
+
     if (!window.confirm('DELETE this work log? \n\nThis action cannot be undone and will remove associated records from analytics.')) {
       return;
     }
@@ -850,6 +913,7 @@ export default function App() {
       await fetch(`/api/sessions/${id}`, { method: 'DELETE' });
       setSessions(prev => prev.filter(s => s.id !== id));
       if (currentSessionId === id) setCurrentSessionId(null);
+      await logAuditAction('DELETE', `Permanently deleted work log session '${logToDelete.name}' from the system`, id, logToDelete.name);
       
       // Refresh analytics as records are deleted cascade
       const analyticsRes = await fetch('/api/analytics');
@@ -862,7 +926,7 @@ export default function App() {
     }
   };
 
-  const loadSession = (session: Session) => {
+  const loadSession = async (session: Session) => {
     const { state } = session;
     setCurrentSessionId(session.id);
     setSessionName(session.name);
@@ -897,6 +961,7 @@ export default function App() {
     
     setActiveTab('generate');
     setSuccessMessage('Work log loaded successfully');
+    await logAuditAction('LOAD', `Loaded work log session '${session.name}' into workspace for review/editing`, session.id, session.name);
   };
 
   const recordAnalyticsData = async (shedsToRecord: SelectedShed[], sessionId: string) => {
@@ -993,7 +1058,10 @@ export default function App() {
         doc.setFontSize(11);
         doc.setFont('times', 'normal');
         
-        const totalAmount = Math.round(calc.total).toLocaleString('en-IN');
+        const calculatedTotalAmount = shed.is_power_car
+          ? Math.round(calc.primeCost) + Math.round(calc.excise) + Math.round(calc.vat) + Math.round(calc.overhead)
+          : Math.round(calc.coachPrimeCost) + Math.round(calc.goodsPrimeCost) + Math.round(calc.excise) + Math.round(calc.vat) + Math.round(calc.overhead);
+        const totalAmount = calculatedTotalAmount.toLocaleString('en-IN');
         const totalLitres = (shed.goods_litres + shed.coach_litres).toLocaleString('en-IN');
         
         const getFullMonth = (m: string) => {
@@ -1159,7 +1227,7 @@ export default function App() {
           tableBody.push(['Sales Tax/Add.Tax', Math.round(calc.price.vat).toLocaleString('en-IN'), '10023238', Math.round(calc.vat).toLocaleString('en-IN')]);
           tableBody.push(['Other Taxes & Levies', Math.round(calc.price.overhead).toLocaleString('en-IN'), '10022199', Math.round(calc.overhead).toLocaleString('en-IN')]);
         }
-        tableBody.push([{ content: 'TOTAL', styles: { fontStyle: 'bold' } }, Math.round(calc.price.base_price + calc.price.excise + calc.price.vat + calc.price.overhead).toLocaleString('en-IN'), '', { content: Math.round(calc.total).toLocaleString('en-IN'), styles: { fontStyle: 'bold' } }]);
+        tableBody.push([{ content: 'TOTAL', styles: { fontStyle: 'bold' } }, Math.round(calc.price.base_price + calc.price.excise + calc.price.vat + calc.price.overhead).toLocaleString('en-IN'), '', { content: calculatedTotalAmount.toLocaleString('en-IN'), styles: { fontStyle: 'bold' } }]);
 
         autoTable(doc, {
           startY: lastY + 85,
@@ -1255,7 +1323,7 @@ export default function App() {
         }
 
         const finalPdfBytes = await mergedPdf.save();
-        const fileName = `${shed.shed_name}_${shed.railway}_RS_${Math.round(calc.total)}_${shed.coach_litres + (shed.is_power_car ? 0 : shed.goods_litres)}_LITRES_${shed.during_month}${shed.during_year}.pdf`;
+        const fileName = `${shed.shed_name}_${shed.railway}_RS_${calculatedTotalAmount}_${shed.coach_litres + (shed.is_power_car ? 0 : shed.goods_litres)}_LITRES_${shed.during_month}${shed.during_year}.pdf`;
         zip.file(fileName, finalPdfBytes);
       }
 
@@ -1337,6 +1405,16 @@ export default function App() {
               <TrendingUp className="w-4 h-4" />
               Analytics
             </button>
+            <button
+              onClick={() => setActiveTab('audit_logs')}
+              className={cn(
+                "px-4 py-2 rounded-lg text-sm font-semibold transition-all duration-200 flex items-center gap-2",
+                activeTab === 'audit_logs' ? "bg-white text-[#0052CC] shadow-sm" : "text-[#6B7280] hover:text-[#1A1A1A]"
+              )}
+            >
+              <ShieldCheck className="w-4 h-4" />
+              Audit Trail
+            </button>
           </nav>
         </div>
       </header>
@@ -1390,6 +1468,18 @@ export default function App() {
                   </button>
                 </div>
               </div>
+
+              {isSessionFinalized && (
+                <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 flex items-start gap-3 shadow-sm">
+                  <ShieldCheck className="w-5 h-5 text-amber-600 mt-0.5 flex-shrink-0 animate-pulse" />
+                  <div>
+                    <h4 className="text-sm font-bold text-amber-800">Archived/Finalized Work Log Mode</h4>
+                    <p className="text-xs text-amber-700 mt-0.5">
+                      This work log has been completed and finalized. You are allowed to edit it; any updates you make will be saved, synchronized to analytics, and logged under the audit trail with detailed history.
+                    </p>
+                  </div>
+                </div>
+              )}
 
               {/* Step 4 Sections */}
               {/* Step 1: Global Config */}
@@ -1645,6 +1735,30 @@ export default function App() {
 
                 {/* Selected Sheds List */}
                 <div className="space-y-4">
+                  {selectedSheds.length > 0 && (
+                    <div className="bg-gradient-to-r from-[#0052CC]/10 to-[#0052CC]/5 border border-[#0052CC]/20 rounded-2xl p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                      <div>
+                        <p className="text-xs font-black text-[#0052CC] uppercase tracking-widest mb-1">Total Estimated Package Amount</p>
+                        <p className="text-sm text-[#4B5563] font-medium">
+                          Aggregate estimate of <span className="font-bold text-[#1A1A1A]">{selectedSheds.length} consuming shed{selectedSheds.length > 1 ? 's' : ''}</span>
+                        </p>
+                      </div>
+                      <div className="flex items-baseline gap-1 bg-white px-4 py-2 rounded-xl border border-[#0052CC]/10 shadow-sm w-fit">
+                        <span className="text-xs font-bold text-[#6B7280]">Total:</span>
+                        <span className="text-2xl font-black text-[#0052CC]">
+                          ₹{selectedSheds.reduce((sum, s) => {
+                            const c = calculateAmounts(s);
+                            const roundedTotal = c ? (s.is_power_car
+                              ? Math.round(c.primeCost) + Math.round(c.excise) + Math.round(c.vat) + Math.round(c.overhead)
+                              : Math.round(c.coachPrimeCost) + Math.round(c.goodsPrimeCost) + Math.round(c.excise) + Math.round(c.vat) + Math.round(c.overhead))
+                              : 0;
+                            return sum + roundedTotal;
+                          }, 0).toLocaleString('en-IN')}
+                        </span>
+                      </div>
+                    </div>
+                  )}
+
                   {selectedSheds.length > 0 ? (
                     selectedSheds.map((shed, index) => {
                       const calc = calculateAmounts(shed);
@@ -1989,6 +2103,7 @@ export default function App() {
                 onLoad={loadSession} 
                 onDelete={deleteSession} 
                 onComplete={completeSession}
+                priceMaster={priceMaster}
               />
             </motion.div>
           ) : activeTab === 'analytics' ? (
@@ -2321,6 +2436,19 @@ export default function App() {
                   <p className="text-xs font-medium text-[#6B7280]">Changes are saved locally for the current session. Ensure all rates are accurate before generating certificates.</p>
                 </div>
               </div>
+            </motion.div>
+          ) : activeTab === 'audit_logs' ? (
+            <motion.div
+              key="audit_logs"
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -10 }}
+            >
+              <div className="mb-8">
+                <h2 className="text-2xl font-black text-[#1A1A1A]">System Audit Trail</h2>
+                <p className="text-sm text-[#6B7280] font-medium">Full compliance history and audit logging of all modifications made in the system.</p>
+              </div>
+              <AuditTrail logs={auditLogs} onRefresh={fetchAuditLogs} />
             </motion.div>
           ) : (
             <motion.div

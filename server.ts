@@ -55,6 +55,16 @@ db.exec(`
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
   );
+
+  CREATE TABLE IF NOT EXISTS audit_logs (
+    id TEXT PRIMARY KEY,
+    session_id TEXT,
+    session_name TEXT,
+    user_email TEXT NOT NULL,
+    action_type TEXT NOT NULL,
+    details TEXT NOT NULL,
+    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
 `);
 
 // Alter existing tables if needed
@@ -113,6 +123,9 @@ app.post("/api/analytics/batch", (req, res) => {
   `);
 
   const transaction = db.transaction((recs) => {
+    if (recs.length > 0 && recs[0].session_id) {
+      db.prepare("DELETE FROM consumption_records WHERE session_id = ?").run(recs[0].session_id);
+    }
     for (const r of recs) {
       insert.run(
         r.id, r.session_id || null, r.shed_name, r.railway, r.supplying_shed, r.month, r.year,
@@ -123,6 +136,21 @@ app.post("/api/analytics/batch", (req, res) => {
   });
 
   transaction(records);
+  res.json({ success: true });
+});
+
+// Audit Logs APIs
+app.get("/api/audit-logs", (req, res) => {
+  const logs = db.prepare("SELECT * FROM audit_logs ORDER BY timestamp DESC LIMIT 500").all();
+  res.json(logs);
+});
+
+app.post("/api/audit-logs", (req, res) => {
+  const { id, session_id, session_name, user_email, action_type, details } = req.body;
+  db.prepare(`
+    INSERT INTO audit_logs (id, session_id, session_name, user_email, action_type, details, timestamp)
+    VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+  `).run(id || Math.random().toString(36).substr(2, 9), session_id || null, session_name || null, user_email, action_type, details);
   res.json({ success: true });
 });
 
