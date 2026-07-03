@@ -7,6 +7,7 @@ import {
   Search, 
   Settings, 
   ChevronRight,
+  ChevronLeft,
   Calendar,
   Building2,
   Calculator,
@@ -192,6 +193,76 @@ export default function App() {
   });
   const [priceMaster, setPriceMaster] = useState<PriceMasterEntry[]>([]);
   const [shedMaster, setShedMaster] = useState<ShedMasterEntry[]>([]);
+
+  // Price Master Pagination States
+  const priceMasterYears = useMemo(() => {
+    const years = Array.from(new Set(priceMaster.map(p => p.year))) as string[];
+    return years.sort((a, b) => b.localeCompare(a));
+  }, [priceMaster]);
+
+  const [selectedPriceYear, setSelectedPriceYear] = useState<string>('');
+
+  // Sync selectedPriceYear to the latest available year if empty or not valid
+  useEffect(() => {
+    if (priceMasterYears.length > 0) {
+      if (!selectedPriceYear || !priceMasterYears.includes(selectedPriceYear)) {
+        setSelectedPriceYear(priceMasterYears[0]);
+      }
+    } else {
+      setSelectedPriceYear(new Date().getFullYear().toString());
+    }
+  }, [priceMasterYears, selectedPriceYear]);
+
+  const [pricePage, setPricePage] = useState(1);
+
+  // Reset page to 1 when year selection changes
+  useEffect(() => {
+    setPricePage(1);
+  }, [selectedPriceYear]);
+
+  const priceMonthsPerPage = 4;
+
+  const uniqueMonthsForSelectedYear = useMemo(() => {
+    const filtered = priceMaster.filter(p => p.year === selectedPriceYear);
+    const months = Array.from(new Set(filtered.map(p => p.month))) as string[];
+    return months.sort((a, b) => MONTHS.indexOf(b) - MONTHS.indexOf(a));
+  }, [priceMaster, selectedPriceYear]);
+
+  const totalPricePages = Math.max(1, Math.ceil(uniqueMonthsForSelectedYear.length / priceMonthsPerPage));
+
+  const paginatedMonths = useMemo(() => {
+    const startIndex = (pricePage - 1) * priceMonthsPerPage;
+    return uniqueMonthsForSelectedYear.slice(startIndex, startIndex + priceMonthsPerPage);
+  }, [uniqueMonthsForSelectedYear, pricePage]);
+
+  // Derived filtered & paginated Price Master
+  const paginatedPriceMaster = useMemo(() => {
+    const filtered = priceMaster.filter(p => p.year === selectedPriceYear && paginatedMonths.includes(p.month));
+    return filtered.sort((a, b) => {
+      const monthA = MONTHS.indexOf(a.month);
+      const monthB = MONTHS.indexOf(b.month);
+      if (monthB !== monthA) return monthB - monthA;
+      return a.supplying_shed.localeCompare(b.supplying_shed);
+    });
+  }, [priceMaster, selectedPriceYear, paginatedMonths]);
+
+  // Shed Master Pagination States
+  const [shedMasterPage, setShedMasterPage] = useState(1);
+  const shedMasterPerPage = 5;
+
+  const totalShedMasterPages = Math.max(1, Math.ceil(shedMaster.length / shedMasterPerPage));
+
+  // Reset page when length decreases below bounds
+  useEffect(() => {
+    if (shedMasterPage > totalShedMasterPages) {
+      setShedMasterPage(totalShedMasterPages);
+    }
+  }, [shedMaster.length, totalShedMasterPages, shedMasterPage]);
+
+  const paginatedShedMaster = useMemo(() => {
+    const startIndex = (shedMasterPage - 1) * shedMasterPerPage;
+    return shedMaster.slice(startIndex, startIndex + shedMasterPerPage);
+  }, [shedMaster, shedMasterPage, shedMasterPerPage]);
   const [selectedSupplyingShed, setSelectedSupplyingShed] = useState('HXP');
   const [selectedSheds, setSelectedSheds] = useState<SelectedShed[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
@@ -2176,10 +2247,31 @@ export default function App() {
               </div>
 
               <div className="bg-white rounded-2xl shadow-sm border border-[#E5E7EB] overflow-hidden">
-                <div className="p-6 border-b border-[#E5E7EB] flex items-center justify-between">
+                <div className="p-6 border-b border-[#E5E7EB] flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                   <div className="flex items-center gap-2">
                     <Settings className="text-[#0052CC] w-5 h-5" />
                     <h2 className="text-sm font-bold uppercase tracking-widest text-[#6B7280]">Price Master Management</h2>
+                  </div>
+
+                  <div className="flex items-center gap-3">
+                    <div className="flex items-center gap-1.5 bg-gray-50 border border-gray-200 px-3 py-1.5 rounded-xl">
+                      <span className="text-[10px] font-black uppercase text-[#6B7280]">Year:</span>
+                      <select
+                        value={selectedPriceYear}
+                        onChange={(e) => setSelectedPriceYear(e.target.value)}
+                        className="bg-transparent text-xs font-bold text-[#1A1A1A] border-none outline-none focus:ring-0 p-0 cursor-pointer"
+                      >
+                        {priceMasterYears.length > 0 ? (
+                          priceMasterYears.map(y => <option key={y} value={y}>{y}</option>)
+                        ) : (
+                          <option value="2026">2026</option>
+                        )}
+                      </select>
+                    </div>
+
+                    <div className="text-xs font-semibold text-gray-500 bg-gray-50 border border-gray-200 px-3 py-1.5 rounded-xl">
+                      Page <span className="font-bold text-[#1A1A1A]">{pricePage}</span> of <span className="font-bold text-[#1A1A1A]">{totalPricePages}</span>
+                    </div>
                   </div>
                 </div>
 
@@ -2199,7 +2291,7 @@ export default function App() {
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-[#E5E7EB]">
-                      {sortedPriceMaster.map((entry) => (
+                      {paginatedPriceMaster.map((entry) => (
                         <React.Fragment key={entry.id}>
                           {(Object.entries(entry.periods) as [string, PriceData][]).map(([period, data], pIdx) => {
                             const total = data.base_price + data.excise + data.vat + data.overhead;
@@ -2430,6 +2522,83 @@ export default function App() {
                     </tbody>
                   </table>
                 </div>
+
+                {/* Price Master Pagination */}
+                {totalPricePages > 1 && (
+                  <div className="flex items-center justify-between border-t border-[#E5E7EB] px-6 py-4 bg-white animate-fade-in">
+                    <div className="flex flex-1 justify-between sm:hidden">
+                      <button
+                        onClick={() => setPricePage(p => Math.max(1, p - 1))}
+                        disabled={pricePage === 1}
+                        className="relative inline-flex items-center rounded-xl border border-[#E5E7EB] bg-white px-4 py-2 text-xs font-bold uppercase text-gray-700 hover:bg-gray-50 disabled:opacity-50 transition-colors"
+                      >
+                        Previous
+                      </button>
+                      <button
+                        onClick={() => setPricePage(p => Math.min(totalPricePages, p + 1))}
+                        disabled={pricePage === totalPricePages}
+                        className="relative ml-3 inline-flex items-center rounded-xl border border-[#E5E7EB] bg-white px-4 py-2 text-xs font-bold uppercase text-gray-700 hover:bg-gray-50 disabled:opacity-50 transition-colors"
+                      >
+                        Next
+                      </button>
+                    </div>
+                    <div className="hidden sm:flex sm:flex-1 sm:items-center sm:justify-between">
+                      <div>
+                        <p className="text-xs text-gray-500 font-medium">
+                          Showing <span className="font-bold text-[#1A1A1A]">{uniqueMonthsForSelectedYear.slice((pricePage - 1) * priceMonthsPerPage, pricePage * priceMonthsPerPage).length}</span> of <span className="font-bold text-[#1A1A1A]">{uniqueMonthsForSelectedYear.length}</span> months for {selectedPriceYear}
+                        </p>
+                      </div>
+                      <div>
+                        <nav className="isolate inline-flex -space-x-px rounded-xl shadow-sm gap-1 bg-gray-50 p-1 border border-[#E5E7EB]" aria-label="Price Pagination">
+                          <button
+                            onClick={() => setPricePage(1)}
+                            disabled={pricePage === 1}
+                            className="relative inline-flex items-center rounded-lg px-2 py-1 text-gray-400 hover:bg-white hover:text-gray-700 disabled:opacity-30 cursor-pointer transition-colors"
+                          >
+                            First
+                          </button>
+                          <button
+                            onClick={() => setPricePage(p => Math.max(1, p - 1))}
+                            disabled={pricePage === 1}
+                            className="relative inline-flex items-center rounded-lg px-2 py-1 text-gray-400 hover:bg-white hover:text-gray-700 disabled:opacity-30 cursor-pointer transition-colors"
+                          >
+                            <ChevronLeft className="w-4 h-4" />
+                          </button>
+                          
+                          {Array.from({ length: totalPricePages }, (_, i) => i + 1).map((p) => (
+                            <button
+                              key={p}
+                              onClick={() => setPricePage(p)}
+                              className={cn(
+                                "relative inline-flex items-center rounded-lg px-3.5 py-1 text-xs font-bold transition-all cursor-pointer",
+                                pricePage === p
+                                  ? "bg-white text-[#0052CC] shadow-sm border border-[#E5E7EB]"
+                                  : "text-[#6B7280] hover:bg-white hover:text-[#1A1A1A]"
+                              )}
+                            >
+                              {p}
+                            </button>
+                          ))}
+
+                          <button
+                            onClick={() => setPricePage(p => Math.min(totalPricePages, p + 1))}
+                            disabled={pricePage === totalPricePages}
+                            className="relative inline-flex items-center rounded-lg px-2 py-1 text-gray-400 hover:bg-white hover:text-gray-700 disabled:opacity-30 cursor-pointer transition-colors"
+                          >
+                            <ChevronRight className="w-4 h-4" />
+                          </button>
+                          <button
+                            onClick={() => setPricePage(totalPricePages)}
+                            disabled={pricePage === totalPricePages}
+                            className="relative inline-flex items-center rounded-lg px-2 py-1 text-gray-400 hover:bg-white hover:text-gray-700 disabled:opacity-30 cursor-pointer transition-colors"
+                          >
+                            Last
+                          </button>
+                        </nav>
+                      </div>
+                    </div>
+                  </div>
+                )}
                 
                 <div className="p-6 bg-[#F9FAFB] border-t border-[#E5E7EB] flex items-center gap-3">
                   <CheckCircle2 className="text-emerald-500 w-5 h-5" />
@@ -2512,8 +2681,11 @@ export default function App() {
               </div>
 
               <div className="bg-white rounded-2xl shadow-sm border border-[#E5E7EB] overflow-hidden">
-                <div className="p-6 border-b border-[#E5E7EB]">
-                  <h2 className="text-sm font-bold uppercase tracking-widest text-[#6B7280]">Persistent Shed Master List</h2>
+                <div className="p-6 border-b border-[#E5E7EB] flex items-center justify-between">
+                  <h2 className="text-sm font-bold uppercase tracking-widest text-[#6B7280]">Shed Master List</h2>
+                  <div className="text-xs font-semibold text-gray-500 bg-gray-50 border border-gray-200 px-3 py-1.5 rounded-xl">
+                    Page <span className="font-bold text-[#1A1A1A]">{shedMasterPage}</span> of <span className="font-bold text-[#1A1A1A]">{totalShedMasterPages}</span>
+                  </div>
                 </div>
                 <div className="overflow-x-auto">
                   <table className="w-full text-sm text-left">
@@ -2525,7 +2697,7 @@ export default function App() {
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-[#E5E7EB]">
-                      {shedMaster.map((shed) => (
+                      {paginatedShedMaster.map((shed) => (
                         <tr key={shed.id} className="hover:bg-[#F9FAFB] transition-colors">
                           <td className="px-6 py-4 font-bold">{shed.shed_name}</td>
                           <td className="px-6 py-4">{shed.railway}</td>
@@ -2549,6 +2721,83 @@ export default function App() {
                     </tbody>
                   </table>
                 </div>
+
+                {/* Shed Master Pagination */}
+                {totalShedMasterPages > 1 && (
+                  <div className="flex items-center justify-between border-t border-[#E5E7EB] px-6 py-4 bg-white animate-fade-in">
+                    <div className="flex flex-1 justify-between sm:hidden">
+                      <button
+                        onClick={() => setShedMasterPage(p => Math.max(1, p - 1))}
+                        disabled={shedMasterPage === 1}
+                        className="relative inline-flex items-center rounded-xl border border-[#E5E7EB] bg-white px-4 py-2 text-xs font-bold uppercase text-gray-700 hover:bg-gray-50 disabled:opacity-50 transition-colors"
+                      >
+                        Previous
+                      </button>
+                      <button
+                        onClick={() => setShedMasterPage(p => Math.min(totalShedMasterPages, p + 1))}
+                        disabled={shedMasterPage === totalShedMasterPages}
+                        className="relative ml-3 inline-flex items-center rounded-xl border border-[#E5E7EB] bg-white px-4 py-2 text-xs font-bold uppercase text-gray-700 hover:bg-gray-50 disabled:opacity-50 transition-colors"
+                      >
+                        Next
+                      </button>
+                    </div>
+                    <div className="hidden sm:flex sm:flex-1 sm:items-center sm:justify-between">
+                      <div>
+                        <p className="text-xs text-gray-500 font-medium">
+                          Showing <span className="font-bold text-[#1A1A1A]">{paginatedShedMaster.length}</span> of <span className="font-bold text-[#1A1A1A]">{shedMaster.length}</span> sheds
+                        </p>
+                      </div>
+                      <div>
+                        <nav className="isolate inline-flex -space-x-px rounded-xl shadow-sm gap-1 bg-gray-50 p-1 border border-[#E5E7EB]" aria-label="Shed Pagination">
+                          <button
+                            onClick={() => setShedMasterPage(1)}
+                            disabled={shedMasterPage === 1}
+                            className="relative inline-flex items-center rounded-lg px-2 py-1 text-gray-400 hover:bg-white hover:text-gray-700 disabled:opacity-30 cursor-pointer transition-colors"
+                          >
+                            First
+                          </button>
+                          <button
+                            onClick={() => setShedMasterPage(p => Math.max(1, p - 1))}
+                            disabled={shedMasterPage === 1}
+                            className="relative inline-flex items-center rounded-lg px-2 py-1 text-gray-400 hover:bg-white hover:text-gray-700 disabled:opacity-30 cursor-pointer transition-colors"
+                          >
+                            <ChevronLeft className="w-4 h-4" />
+                          </button>
+                          
+                          {Array.from({ length: totalShedMasterPages }, (_, i) => i + 1).map((p) => (
+                            <button
+                              key={p}
+                              onClick={() => setShedMasterPage(p)}
+                              className={cn(
+                                "relative inline-flex items-center rounded-lg px-3.5 py-1.5 text-xs font-bold transition-all cursor-pointer",
+                                shedMasterPage === p
+                                  ? "bg-white text-[#0052CC] shadow-sm border border-[#E5E7EB]"
+                                  : "text-[#6B7280] hover:bg-white hover:text-[#1A1A1A]"
+                              )}
+                            >
+                              {p}
+                            </button>
+                          ))}
+
+                          <button
+                            onClick={() => setShedMasterPage(p => Math.min(totalShedMasterPages, p + 1))}
+                            disabled={shedMasterPage === totalShedMasterPages}
+                            className="relative inline-flex items-center rounded-lg px-2 py-1 text-gray-400 hover:bg-white hover:text-gray-700 disabled:opacity-30 cursor-pointer transition-colors"
+                          >
+                            <ChevronRight className="w-4 h-4" />
+                          </button>
+                          <button
+                            onClick={() => setShedMasterPage(totalShedMasterPages)}
+                            disabled={shedMasterPage === totalShedMasterPages}
+                            className="relative inline-flex items-center rounded-lg px-2 py-1 text-gray-400 hover:bg-white hover:text-gray-700 disabled:opacity-30 cursor-pointer transition-colors"
+                          >
+                            Last
+                          </button>
+                        </nav>
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
             </motion.div>
           )}
